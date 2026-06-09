@@ -307,7 +307,14 @@ class VaultService {
     });
   }
 
-  Future<void> addOrUpdateMonthlySnapshot(int year, int month, double credit, double loan) async {
+  Future<void> addOrUpdateMonthlySnapshot(
+      int year,
+      int month,
+      double credit,
+      double loan, {
+      List<Map<String, dynamic>>? creditDetails,
+      List<Map<String, dynamic>>? loanDetails,
+  }) async {
     final reports = await loadMonthlyReports();
     final keyExists = reports.indexWhere((r) => r['year'] == year && r['month'] == month);
     final entry = {
@@ -315,6 +322,8 @@ class VaultService {
       'month': month,
       'credit': credit,
       'loan': loan,
+      if (creditDetails != null) 'creditDetails': creditDetails,
+      if (loanDetails != null) 'loanDetails': loanDetails,
       'savedAt': DateTime.now().toIso8601String(),
     };
     if (keyExists >= 0) {

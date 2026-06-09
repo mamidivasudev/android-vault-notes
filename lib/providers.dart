@@ -83,6 +83,13 @@ class ShowFavoritesOnlyNotifier extends Notifier<bool> {
   @override
   set state(bool value) => super.state = value;
 }
+class ShowLinkPreviewsNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+  @override
+  set state(bool value) => super.state = value;
+}
+final showLinkPreviewsProvider = NotifierProvider<ShowLinkPreviewsNotifier, bool>(ShowLinkPreviewsNotifier.new);
 final showFavoritesOnlyProvider = NotifierProvider<ShowFavoritesOnlyNotifier, bool>(ShowFavoritesOnlyNotifier.new);
 
 class SortOrderNotifier extends Notifier<NoteSortOrder> {

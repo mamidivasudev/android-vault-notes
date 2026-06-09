@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:any_link_preview/any_link_preview.dart';
 import '../providers.dart';
 import '../models.dart';
 import '../dialogs/link_dialog.dart';
@@ -72,6 +73,8 @@ class _LinksViewState extends ConsumerState<LinksView> {
           chipKeys: _chipKeys,
           showFavoritesOnly: showFavs,
           onFavoriteToggle: () => ref.read(showFavoritesOnlyProvider.notifier).state = !showFavs,
+          showPreviewsEnabled: ref.watch(showLinkPreviewsProvider),
+          onPreviewsToggle: () => ref.read(showLinkPreviewsProvider.notifier).state = !ref.read(showLinkPreviewsProvider),
           itemCount: allLinks.where((l) {
             final matchCat = currentSelectedCat == 'All' || l.category == currentSelectedCat;
             final matchFav = !showFavs || l.isFavorite;
@@ -212,6 +215,7 @@ class _LinkCard extends ConsumerWidget {
         : (isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0));
     final titleColor = isDark ? Colors.white : const Color(0xFF1E293B);
     final urlColor = isDark ? Colors.white38 : Colors.grey[500];
+    final showPreviews = ref.watch(showLinkPreviewsProvider);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -236,8 +240,12 @@ class _LinkCard extends ConsumerWidget {
         borderRadius: BorderRadius.circular(16),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
+              Row(
+                children: [
               if (isSelectionMode)
                 Padding(
                   padding: const EdgeInsets.only(right: 12),
@@ -322,6 +330,60 @@ class _LinkCard extends ConsumerWidget {
                   ],
                 ),
               if (trailing != null) trailing!,
+                ],
+              ),
+              if (showPreviews && !link.isLocked)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12, bottom: 4),
+                  child: Container(
+                    height: 180,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: isDark ? Colors.grey.shade800 : Colors.grey.shade300),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: IgnorePointer(
+                        child: AnyLinkPreview(
+                          link: link.url,
+                          displayDirection: UIDirection.uiDirectionVertical,
+                          showMultimedia: true,
+                          bodyMaxLines: 3,
+                          bodyTextOverflow: TextOverflow.ellipsis,
+                          titleStyle: TextStyle(
+                            color: isDark ? Colors.white : Colors.black,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                          bodyStyle: TextStyle(
+                            color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
+                            fontSize: 12,
+                          ),
+                          errorWidget: Container(
+                            color: isDark ? Colors.grey.shade800 : Colors.grey.shade100,
+                            child: Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.link, size: 40, color: isDark ? Colors.grey.shade600 : Colors.grey.shade400),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Preview not available',
+                                    style: TextStyle(
+                                      color: isDark ? Colors.grey.shade400 : Colors.grey.shade500,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),

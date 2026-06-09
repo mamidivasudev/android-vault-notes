@@ -16,6 +16,8 @@ class CategoryChipBar extends StatelessWidget {
   final bool showGroupByDateToggle;
   final bool groupByDateEnabled;
   final VoidCallback? onGroupByDateToggle;
+  final bool showPreviewsEnabled;
+  final VoidCallback? onPreviewsToggle;
 
   const CategoryChipBar({
     super.key,
@@ -32,6 +34,8 @@ class CategoryChipBar extends StatelessWidget {
     this.showGroupByDateToggle = false,
     this.groupByDateEnabled = false,
     this.onGroupByDateToggle,
+    this.showPreviewsEnabled = false,
+    this.onPreviewsToggle,
   });
 
   void _showAllCategories(BuildContext context) {
@@ -223,6 +227,17 @@ class CategoryChipBar extends StatelessWidget {
               tooltip: 'Show Favorites Only',
               splashRadius: 24,
             ),
+            if (onPreviewsToggle != null)
+              IconButton(
+                icon: Icon(
+                  showPreviewsEnabled ? Icons.image : Icons.image_outlined,
+                  color: showPreviewsEnabled ? primaryColor : (isDark ? Colors.white60 : Colors.grey.shade600),
+                  size: 22,
+                ),
+                onPressed: onPreviewsToggle,
+                tooltip: showPreviewsEnabled ? 'Hide Previews' : 'Show Previews',
+                splashRadius: 24,
+              ),
             if (showGroupByDateToggle && onGroupByDateToggle != null)
               IconButton(
                 icon: Icon(

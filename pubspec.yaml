@@ -48,6 +48,7 @@ dependencies:
   url_launcher: ^6.3.2
   flutter_linkify: ^6.0.0
   receive_sharing_intent: ^1.1.0
+  any_link_preview: ^3.0.3
   real_volume: ^1.0.9
   sqflite: ^2.4.2+1
   flutter_animate: ^4.5.2

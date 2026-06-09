@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models.dart';
@@ -35,7 +38,24 @@ class _BillsViewState extends ConsumerState<BillsView> {
     });
   }
 
-  Future<void> _showMonthlyReport(List<Bill> activeBills) async {
+  Future<void> _showMonthlyReport(List<Bill> allBills) async {
+    final currentCreditBills = allBills.where((b) => (b.type ?? 'Credit Card') == 'Credit Card').toList();
+    final currentLoanBills = allBills.where((b) => b.type == 'Loan').toList();
+    final currentCredit = currentCreditBills.fold<double>(0.0, (s, b) => s + b.amount);
+    final currentLoan = currentLoanBills.fold<double>(0.0, (s, b) => s + b.amount);
+    
+    final creditDetails = currentCreditBills.map((b) => <String, dynamic>{'title': b.title, 'amount': b.amount}).toList();
+    final loanDetails = currentLoanBills.map((b) => <String, dynamic>{'title': b.title, 'amount': b.amount}).toList();
+
+    final now = DateTime.now();
+    await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
+      now.year, 
+      now.month, 
+      currentCredit, 
+      currentLoan,
+      creditDetails: creditDetails,
+      loanDetails: loanDetails,
+    );
     var reports = await ref.read(vaultServiceProvider).loadMonthlyReports();
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -50,9 +70,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
-                Text('• Monthly reports are manual snapshots.'),
-                SizedBox(height: 6),
-                Text('• Use "Save Now" to record current totals for the current month.'),
+                Text('• The current month is automatically updated when you open this report.'),
                 SizedBox(height: 6),
                 Text('• Tap the three-dot menu on a month to edit its saved values.'),
                 SizedBox(height: 6),
@@ -70,6 +88,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
       // ignore prefs errors
     }
 
+    final Set<int> expandedIndices = {};
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -95,6 +114,8 @@ class _BillsViewState extends ConsumerState<BillsView> {
             'label': label,
             'credit': credit,
             'loan': loan,
+            'creditDetails': found['creditDetails'] ?? [],
+            'loanDetails': found['loanDetails'] ?? [],
             'recorded': recorded,
             'dt': dt,
           };
@@ -164,6 +185,43 @@ class _BillsViewState extends ConsumerState<BillsView> {
                           ),
                         ],
                       ),
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.ios_share_rounded, color: isDark ? Colors.white70 : Colors.black87),
+                      tooltip: 'Export as CSV',
+                      onPressed: () async {
+                        try {
+                          final buffer = StringBuffer();
+                          buffer.writeln('Month,Credit Cards (Total),Loans (Total),Overall Total,Credit Details,Loan Details');
+                          for (final m in months) {
+                            final recorded = m['recorded'] as bool? ?? false;
+                            if (!recorded) continue;
+                            final label = m['label'];
+                            final credit = m['credit'];
+                            final loan = m['loan'];
+                            final total = (credit as num) + (loan as num);
+                            final creditDetails = (m['creditDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                            final loanDetails = (m['loanDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                            
+                            String formatDetails(List<Map<String, dynamic>> details) {
+                              if (details.isEmpty) return '';
+                              return details.map((d) => '${d['title']}: ${d['amount']}').join(' | ').replaceAll('"', '""');
+                            }
+                            final cDetailsStr = formatDetails(creditDetails);
+                            final lDetailsStr = formatDetails(loanDetails);
+                            
+                            buffer.writeln('"$label",$credit,$loan,$total,"$cDetailsStr","$lDetailsStr"');
+                          }
+                          final dir = await getTemporaryDirectory();
+                          final file = File('${dir.path}/Vault_Monthly_Report.csv');
+                          await file.writeAsString(buffer.toString());
+                          await Share.shareXFiles([XFile(file.path)], text: 'Vault Notes - Monthly Report');
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error exporting: $e')));
+                          }
+                        }
+                      },
                     ),
                     TextButton(
                       onPressed: () => Navigator.pop(ctx),
@@ -242,10 +300,25 @@ class _BillsViewState extends ConsumerState<BillsView> {
                     final loanVal = (m['loan'] as double?) ?? 0.0;
                     final total = creditVal + loanVal;
                     final dt = m['dt'] as DateTime;
+                    final creditDetails = (m['creditDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                    final loanDetails = (m['loanDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                    final hasDetails = creditDetails.isNotEmpty || loanDetails.isNotEmpty;
+                    final isExpanded = expandedIndices.contains(idx);
                     final isCurrentMonth = dt.year == DateTime.now().year &&
                         dt.month == DateTime.now().month;
 
                     return GestureDetector(
+                      onTap: () {
+                        if (hasDetails) {
+                          setModalState(() {
+                            if (isExpanded) {
+                              expandedIndices.remove(idx);
+                            } else {
+                              expandedIndices.add(idx);
+                            }
+                          });
+                        }
+                      },
                       onLongPress: () async {
                         final creditController = TextEditingController(
                             text: creditVal > 0
@@ -346,12 +419,14 @@ class _BillsViewState extends ConsumerState<BillsView> {
                             width: 1,
                           ),
                         ),
-                        child: Row(
+                        child: Column(
                           children: [
-                            Expanded(
-                              flex: 3,
-                              child: Row(
-                                children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  flex: 3,
+                                  child: Row(
+                                    children: [
                                   if (isCurrentMonth)
                                     Container(
                                       width: 6,
@@ -424,9 +499,52 @@ class _BillsViewState extends ConsumerState<BillsView> {
                             ),
                           ],
                         ),
-                      ),
-                    );
-                  },
+                        if (isExpanded && hasDetails)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12, bottom: 4),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Expanded(
+                                  flex: 3,
+                                  child: SizedBox(),
+                                ),
+                                Expanded(
+                                  flex: 2,
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    children: creditDetails.map((d) => Padding(
+                                      padding: const EdgeInsets.only(bottom: 4),
+                                      child: Text('${d['title']}\n${fmt((d['amount'] as num).toDouble())}',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.orange.shade700)),
+                                    )).toList(),
+                                  ),
+                                ),
+                                Expanded(
+                                  flex: 2,
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    children: loanDetails.map((d) => Padding(
+                                      padding: const EdgeInsets.only(bottom: 4),
+                                      child: Text('${d['title']}\n${fmt((d['amount'] as num).toDouble())}',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: const Color(0xFF1D63D2))),
+                                    )).toList(),
+                                  ),
+                                ),
+                                const Expanded(
+                                  flex: 2,
+                                  child: SizedBox(),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
                 ),
               ),
               // Long press hint
@@ -717,12 +835,12 @@ class _BillsViewState extends ConsumerState<BillsView> {
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (activeBills.isNotEmpty)
+                      if (bills.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 8),
                           child: Builder(builder: (context) {
                             final anyAlertsEnabled =
-                            activeBills.any((b) => b.reminderEnabled);
+                            bills.any((b) => b.reminderEnabled);
                             final totalCredit = bills
                                 .where((b) =>
                             (b.type ?? 'Credit Card') ==
@@ -762,7 +880,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                       borderRadius:
                                       BorderRadius.circular(8),
                                       onTap: () =>
-                                          _showMonthlyReport(activeBills),
+                                          _showMonthlyReport(bills),
                                       child: Padding(
                                         padding: const EdgeInsets.all(6.0),
                                         child: Image.asset(
@@ -935,7 +1053,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: CustomScrollView(
                             slivers: [
-                              if (activeBills.isNotEmpty) ...slivers,
+                              if (bills.isNotEmpty) ...slivers,
                             ],
                           ),
                         ),

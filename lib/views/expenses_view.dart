@@ -292,6 +292,31 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
                     ],
                   ),
                 ),
+                GestureDetector(
+                  onTap: () {
+                    final filtered = selectedCat == 'All'
+                        ? ref.read(expensesProvider)
+                        : ref.read(expensesProvider)
+                            .where((e) => e.category == selectedCat)
+                            .toList();
+                    exportExpensesToTXT(context, filtered, selectedCat);
+                  },
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.description_outlined, size: 16, color: Color(0xFF10B981)),
+                      SizedBox(width: 4),
+                      Text(
+                        'Export TXT',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF10B981),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ],

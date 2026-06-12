@@ -223,6 +223,46 @@ class _BillsViewState extends ConsumerState<BillsView> {
                         }
                       },
                     ),
+                    IconButton(
+                      icon: Icon(Icons.description_outlined, color: isDark ? Colors.green.shade400 : Colors.green.shade700),
+                      tooltip: 'Export as TXT',
+                      onPressed: () async {
+                        try {
+                          final buffer = StringBuffer();
+                          buffer.writeln('--- Vault Notes: Monthly Report ---');
+                          for (final m in months) {
+                            final recorded = m['recorded'] as bool? ?? false;
+                            if (!recorded) continue;
+                            final label = m['label'];
+                            final credit = m['credit'];
+                            final loan = m['loan'];
+                            final total = (credit as num) + (loan as num);
+                            final creditDetails = (m['creditDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                            final loanDetails = (m['loanDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                            
+                            buffer.writeln('\n[$label]');
+                            buffer.writeln('Credit Cards: ₹$credit');
+                            if (creditDetails.isNotEmpty) {
+                              buffer.writeln('  Details: ${creditDetails.map((d) => '${d['title']}: ₹${d['amount']}').join(' | ')}');
+                            }
+                            buffer.writeln('Loans: ₹$loan');
+                            if (loanDetails.isNotEmpty) {
+                              buffer.writeln('  Details: ${loanDetails.map((d) => '${d['title']}: ₹${d['amount']}').join(' | ')}');
+                            }
+                            buffer.writeln('Total: ₹$total');
+                            buffer.writeln('-' * 40);
+                          }
+                          final dir = await getTemporaryDirectory();
+                          final file = File('${dir.path}/Vault_Monthly_Report.txt');
+                          await file.writeAsString(buffer.toString());
+                          await Share.shareXFiles([XFile(file.path)], text: 'Vault Notes - Monthly Report (TXT)');
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error exporting: $e')));
+                          }
+                        }
+                      },
+                    ),
                     TextButton(
                       onPressed: () => Navigator.pop(ctx),
                       child: const Text('Close'),

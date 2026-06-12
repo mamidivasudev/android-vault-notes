@@ -55,8 +55,11 @@ class _ExpenseDialogState extends ConsumerState<ExpenseDialog> {
       _selectedCategory = categories.first;
     }
     
-    return AlertDialog(
-      scrollable: true,
+    return GestureDetector(
+      onTap: () => FocusScope.of(context).unfocus(),
+      behavior: HitTestBehavior.opaque,
+      child: AlertDialog(
+        scrollable: true,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
       contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
@@ -94,11 +97,8 @@ class _ExpenseDialogState extends ConsumerState<ExpenseDialog> {
           ),
         ],
       ),
-      content: GestureDetector(
-        onTap: () => FocusScope.of(context).unfocus(),
-        behavior: HitTestBehavior.opaque,
-        child: SizedBox(
-          width: MediaQuery.of(context).size.width,
+      content: SizedBox(
+        width: MediaQuery.of(context).size.width,
           child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -127,11 +127,6 @@ class _ExpenseDialogState extends ConsumerState<ExpenseDialog> {
                   final latest = matched.first;
                   setState(() {
                     _amountController.text = NumberFormat.decimalPattern('en_IN').format(latest.amount);
-                    _selectedCategory = latest.category;
-                    _type = latest.type;
-                    if (latest.note != null) {
-                      _noteController.text = latest.note!;
-                    }
                   });
                 } else {
                   setState(() {});
@@ -289,6 +284,7 @@ class _ExpenseDialogState extends ConsumerState<ExpenseDialog> {
                       label: Text(cat, style: const TextStyle(fontSize: 10)),
                       selected: isSelected,
                       onSelected: (val) {
+                        FocusScope.of(context).unfocus();
                         if (val) setState(() => _selectedCategory = cat);
                       },
                       padding: EdgeInsets.zero,
@@ -315,7 +311,6 @@ class _ExpenseDialogState extends ConsumerState<ExpenseDialog> {
           ],
         ),
         ),
-      ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
@@ -331,6 +326,7 @@ class _ExpenseDialogState extends ConsumerState<ExpenseDialog> {
           child: Text(widget.expense == null ? 'Add Expense' : 'Update Expense'),
         ),
       ],
+    ),
     );
   }
 
@@ -338,7 +334,10 @@ class _ExpenseDialogState extends ConsumerState<ExpenseDialog> {
     final isSelected = _type == type;
     return Expanded(
       child: InkWell(
-        onTap: () => setState(() => _type = type),
+        onTap: () {
+          FocusScope.of(context).unfocus();
+          setState(() => _type = type);
+        },
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
@@ -361,6 +360,7 @@ class _ExpenseDialogState extends ConsumerState<ExpenseDialog> {
   }
 
   void _handleSave() {
+    FocusScope.of(context).unfocus();
     final title = _titleController.text.trim();
     final amountStr = _amountController.text.trim();
     final note = _noteController.text.trim();

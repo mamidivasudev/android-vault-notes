@@ -1162,6 +1162,40 @@ class _SecurityVerificationDialogState extends State<_SecurityVerificationDialog
     );
   }
 }
+void exportExpensesToTXT(BuildContext context, List<Expense> expenses, String categoryName) async {
+  if (expenses.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('No expenses to export!')),
+    );
+    return;
+  }
+
+  final StringBuffer txtContent = StringBuffer();
+  txtContent.writeln('--- Expenses Export ($categoryName) ---');
+  txtContent.writeln('Date | Title | Category | Type | Amount | Note');
+  txtContent.writeln('-' * 50);
+
+  final formatter = DateFormat('yyyy-MM-dd HH:mm');
+  for (var e in expenses) {
+    txtContent.writeln(
+      '${formatter.format(e.date)} | ${e.title} | ${e.category} | ${e.type} | ₹${e.amount} | ${e.note ?? ""}'
+    );
+  }
+
+  try {
+    final tempDir = await getTemporaryDirectory();
+    final file = File('${tempDir.path}/expenses_${categoryName.toLowerCase().replaceAll(' ', '_')}.txt');
+    await file.writeAsString(txtContent.toString());
+
+    final xFile = XFile(file.path);
+    await Share.shareXFiles([xFile], subject: 'Expenses Export (TXT) - $categoryName');
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Failed to export expenses: $e')),
+    );
+  }
+}
+
 void exportExpensesToCSV(BuildContext context, List<Expense> expenses, String categoryName) async {
   if (expenses.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(

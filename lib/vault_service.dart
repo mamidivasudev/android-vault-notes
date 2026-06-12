@@ -238,9 +238,7 @@ class VaultService {
         try {
           currentData = json.decode(await file.readAsString());
         } catch (e) {
-          // If file is corrupted, we might want to back it up instead of just overwriting with partial data
-          print('Warning: notes_data.json read failed during saveNotes: $e');
-          // We still continue but we've logged it. In a more robust system we'd check if we are missing critical keys.
+          throw Exception('Failed to read notes_data.json during saveNotes (aborting to prevent data loss): $e');
         }
       }
 
@@ -345,7 +343,9 @@ class VaultService {
       if (await file.exists()) {
         try {
           currentData = json.decode(await file.readAsString());
-        } catch (_) {}
+        } catch (e) {
+          throw Exception('Failed to read notes_data.json during saveExpenseCategories: $e');
+        }
       }
 
       final data = {
@@ -381,7 +381,9 @@ class VaultService {
       if (await file.exists()) {
         try {
           currentData = json.decode(await file.readAsString());
-        } catch (_) {}
+        } catch (e) {
+          throw Exception('Failed to read notes_data.json during saveTableCategories: $e');
+        }
       }
 
       final data = {
@@ -464,7 +466,7 @@ class VaultService {
         String safeTitle = note.title.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
         if (safeTitle.isEmpty) safeTitle = 'Untitled';
         // Add short ID to avoid collisions
-        final shortId = note.id.substring(0, 4);
+        final shortId = note.id.length >= 4 ? note.id.substring(note.id.length - 4) : note.id;
         final fileName = "${safeTitle}_$shortId.txt";
         
         final file = File('${catDir.path}/$fileName');
@@ -498,7 +500,7 @@ class VaultService {
         for (final note in catNotes) {
           String safeTitle = note.title.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
           if (safeTitle.isEmpty) safeTitle = 'Deleted';
-          final shortId = note.id.substring(0, 4);
+          final shortId = note.id.length >= 4 ? note.id.substring(note.id.length - 4) : note.id;
           final fileName = "${safeTitle}_$shortId.txt";
           
           final file = File('${binDir.path}/$cat/$fileName');
@@ -580,12 +582,13 @@ class VaultService {
       final entities = await dir.list().toList();
       for (final entity in entities) {
         if (entity is File && entity.path.toLowerCase().endsWith('.txt')) {
-          final title = entity.path.split(Platform.pathSeparator).last.replaceAll(RegExp(r'\.txt$', caseSensitive: false), '');
+          var title = entity.path.split(Platform.pathSeparator).last.replaceAll(RegExp(r'\.txt$', caseSensitive: false), '');
           final content = await entity.readAsString();
           
           String cleanContent = content;
           if (content.startsWith('Title:')) {
             final lines = content.split('\n');
+            title = lines.first.substring(6).trim();
             final separatorIndex = lines.indexWhere((l) => l.startsWith('---'));
             if (separatorIndex != -1) {
               cleanContent = lines.skip(separatorIndex + 1).join('\n').trim();
@@ -736,11 +739,22 @@ class VaultService {
       final entities = await recycleBinDir.list().toList();
       for (final entity in entities) {
         if (entity is File && entity.path.toLowerCase().endsWith('.txt')) {
-           final title = entity.path.split(Platform.pathSeparator).last.replaceAll(RegExp(r'\.txt$', caseSensitive: false), '');
+           var title = entity.path.split(Platform.pathSeparator).last.replaceAll(RegExp(r'\.txt$', caseSensitive: false), '');
            final content = await entity.readAsString();
+           
+           String cleanContent = content;
+           if (content.startsWith('Title:')) {
+             final lines = content.split('\n');
+             title = lines.first.substring(6).trim();
+             final separatorIndex = lines.indexWhere((l) => l.startsWith('---'));
+             if (separatorIndex != -1) {
+               cleanContent = lines.skip(separatorIndex + 1).join('\n').trim();
+             }
+           }
+           
            importedDeletedData['notes'].add({
              'title': title,
-             'content': content,
+             'content': cleanContent,
              'category': 'Recycle Bin',
              'createdAt': (await entity.lastModified()).toIso8601String(),
            });

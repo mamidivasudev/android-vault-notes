@@ -5,13 +5,16 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:image_picker/image_picker.dart';
 import '../models.dart';
 import '../providers.dart';
+import '../services/ocr_service.dart';
 
 class NoteEditor extends ConsumerStatefulWidget {
   final Note note;
   final bool isNew;
-  const NoteEditor({super.key, required this.note, this.isNew = false});
+  final bool openOcrOnStart;
+  const NoteEditor({super.key, required this.note, this.isNew = false, this.openOcrOnStart = false});
   @override
   ConsumerState<NoteEditor> createState() => _NoteEditorState();
 }
@@ -21,6 +24,7 @@ class _NoteEditorState extends ConsumerState<NoteEditor> {
   late TextEditingController _contentController;
   late String _selectedCategory;
   late bool _isEditing;
+  bool _isOcrLoading = false;
   final FocusNode _contentFocusNode = FocusNode();
 
   @override
@@ -30,6 +34,12 @@ class _NoteEditorState extends ConsumerState<NoteEditor> {
     _contentController = TextEditingController(text: widget.note.content);
     _selectedCategory = widget.note.category;
     _isEditing = widget.isNew;
+    // Auto-launch OCR if opened via camera shortcut from notes list
+    if (widget.openOcrOnStart) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _launchOcr();
+      });
+    }
   }
 
   void _clearAll() {
@@ -79,6 +89,20 @@ class _NoteEditorState extends ConsumerState<NoteEditor> {
         appBar: AppBar(
           title: Text(widget.isNew ? 'New Note' : (_isEditing ? 'Editing Note' : 'View Note')),
           actions: [
+            // OCR camera button
+            _isOcrLoading
+              ? const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: SizedBox(
+                    width: 20, height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : IconButton(
+                  icon: const Icon(Icons.camera_alt_outlined),
+                  onPressed: _launchOcr,
+                  tooltip: 'OCR — Scan text from camera',
+                ),
             IconButton(icon: const Icon(Icons.copy), onPressed: _copy, tooltip: 'Copy'),
             IconButton(icon: const Icon(Icons.share), onPressed: _share, tooltip: 'Share'),
             if (_isEditing) 
@@ -296,5 +320,201 @@ class _NoteEditorState extends ConsumerState<NoteEditor> {
 
   void _share() {
     Share.share("${_titleController.text}\n\n${_contentController.text}");
+  }
+
+  // ── OCR ────────────────────────────────────────────────────────────────────
+
+  Future<void> _launchOcr() async {
+    // Let user pick camera or gallery
+    final source = await _showOcrSourcePicker();
+    if (source == null) return;
+
+    setState(() => _isOcrLoading = true);
+    final text = await OcrService.pickAndRecognize(source);
+    if (!mounted) return;
+    setState(() => _isOcrLoading = false);
+
+    if (text == null || text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No text detected in the image.')),
+      );
+      return;
+    }
+    _showOcrResult(text);
+  }
+
+  Future<ImageSource?> _showOcrSourcePicker() async {
+    return showModalBottomSheet<ImageSource>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40, height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade400,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Text(
+                'Scan Text',
+                style: GoogleFonts.lexend(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              const Divider(),
+              ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0xFF1D63D2),
+                  child: Icon(Icons.camera_alt, color: Colors.white),
+                ),
+                title: const Text('Take a Photo'),
+                subtitle: const Text('Open camera and capture'),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0xFF475569),
+                  child: Icon(Icons.photo_library, color: Colors.white),
+                ),
+                title: const Text('Choose from Gallery'),
+                subtitle: const Text('Pick an existing image'),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showOcrResult(String recognizedText) {
+    // Switch to editing mode so text can be inserted
+    if (!_isEditing) setState(() => _isEditing = true);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.4,
+        maxChildSize: 0.92,
+        expand: false,
+        builder: (_, scrollCtrl) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40, height: 4,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade400,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              Row(
+                children: [
+                  const Icon(Icons.document_scanner_outlined, size: 20, color: Color(0xFF1D63D2)),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Recognized Text',
+                    style: GoogleFonts.lexend(fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+              const Divider(height: 20),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: SingleChildScrollView(
+                    controller: scrollCtrl,
+                    child: SelectableText(
+                      recognizedText,
+                      style: const TextStyle(fontSize: 14, height: 1.6),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Action buttons
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        // Append recognized text at end of content
+                        final current = _contentController.text;
+                        _contentController.text = current.isEmpty
+                            ? recognizedText
+                            : '$current\n\n$recognizedText';
+                        setState(() {});
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Text appended to note ✓')),
+                        );
+                      },
+                      icon: const Icon(Icons.add),
+                      label: const Text('Append'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF1D63D2),
+                        side: const BorderSide(color: Color(0xFF1D63D2)),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _contentController.text = recognizedText;
+                        setState(() {});
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Note content replaced ✓')),
+                        );
+                      },
+                      icon: const Icon(Icons.swap_horiz),
+                      label: const Text('Replace'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF1D63D2),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Discard', style: TextStyle(color: Colors.grey)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

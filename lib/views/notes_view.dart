@@ -154,6 +154,19 @@ class _NotesViewState extends ConsumerState<NotesView> {
                   );
                 }
               },
+              onCameraTap: isSelectionMode ? null : () {
+                if (note.isLocked) {
+                  verifyPasscode(context, ref, onSuccess: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (context) => NoteEditor(note: note, openOcrOnStart: true)),
+                    );
+                  });
+                } else {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (context) => NoteEditor(note: note, openOcrOnStart: true)),
+                  );
+                }
+              },
               onLongPress: () {
                 if (!isSelectionMode) {
                   ref.read(selectedNotesProvider.notifier).toggle(note.id);

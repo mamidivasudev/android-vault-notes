@@ -149,6 +149,7 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
 
   Widget _buildSummaryBar(List<Expense> expenses, String selectedCat) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final sortOrder = ref.watch(expenseSortOrderProvider);
     double income = 0;
     double expense = 0;
     for (var e in expenses) {
@@ -240,84 +241,120 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
             const SizedBox(height: 12),
             Divider(height: 1, color: dividerColor),
             const SizedBox(height: 8),
-            Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 16,
-              runSpacing: 8,
-              children: [
-                GestureDetector(
-                  onTap: () => setState(() => _showBreakdown = !_showBreakdown),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        _showBreakdown ? Icons.keyboard_arrow_up : Icons.bar_chart,
-                        size: 16,
-                        color: const Color(0xFF6366F1),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        _showBreakdown ? 'Hide Breakdown' : 'Show Breakdown',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF6366F1),
+            Center(
+              child: SizedBox(
+                width: 280,
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () {
+                              final filtered = selectedCat == 'All'
+                                  ? ref.read(expensesProvider)
+                                  : ref.read(expensesProvider)
+                                      .where((e) => e.category == selectedCat)
+                                      .toList();
+                              exportExpensesToCSV(context, filtered, selectedCat);
+                            },
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.upload_rounded, size: 16, color: Color(0xFF1D63D2)),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Export CSV',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF1D63D2),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                GestureDetector(
-                  onTap: () {
-                    final filtered = selectedCat == 'All'
-                        ? ref.read(expensesProvider)
-                        : ref.read(expensesProvider)
-                            .where((e) => e.category == selectedCat)
-                            .toList();
-                    exportExpensesToCSV(context, filtered, selectedCat);
-                  },
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.upload_rounded, size: 16, color: Color(0xFF1D63D2)),
-                      SizedBox(width: 4),
-                      Text(
-                        'Export CSV',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF1D63D2),
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () {
+                              final filtered = selectedCat == 'All'
+                                  ? ref.read(expensesProvider)
+                                  : ref.read(expensesProvider)
+                                      .where((e) => e.category == selectedCat)
+                                      .toList();
+                              exportExpensesToTXT(context, filtered, selectedCat);
+                            },
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.description_outlined, size: 16, color: Color(0xFF10B981)),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Export TXT',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF10B981),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                GestureDetector(
-                  onTap: () {
-                    final filtered = selectedCat == 'All'
-                        ? ref.read(expensesProvider)
-                        : ref.read(expensesProvider)
-                            .where((e) => e.category == selectedCat)
-                            .toList();
-                    exportExpensesToTXT(context, filtered, selectedCat);
-                  },
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.description_outlined, size: 16, color: Color(0xFF10B981)),
-                      SizedBox(width: 4),
-                      Text(
-                        'Export TXT',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF10B981),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => setState(() => _showBreakdown = !_showBreakdown),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _showBreakdown ? Icons.keyboard_arrow_up : Icons.bar_chart,
+                                  size: 16,
+                                  color: const Color(0xFF6366F1),
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _showBreakdown ? 'Hide Breakdown' : 'Show Breakdown',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF6366F1),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => _showSortOptions(context, ref),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                SizedBox(width: 20), // Placeholder to match icon (16) + spacing (4) of Export TXT
+                                Text(
+                                  'Sort',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF8B5CF6),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ],
         ],
@@ -427,6 +464,64 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
     );
   }
 
+  void _showSortOptions(BuildContext context, WidgetRef ref) {
+    final currentSort = ref.read(expenseSortOrderProvider);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor = isDark ? const Color(0xFF1E293B) : Colors.white;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: bgColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text(
+                  'Sort Expenses',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ),
+              _buildSortOption(context, ref, 'Newest First', ExpenseSortOrder.dateNewest, currentSort, Icons.arrow_downward),
+              _buildSortOption(context, ref, 'Oldest First', ExpenseSortOrder.dateOldest, currentSort, Icons.arrow_upward),
+              _buildSortOption(context, ref, 'Highest Amount', ExpenseSortOrder.amountHighest, currentSort, Icons.attach_money),
+              _buildSortOption(context, ref, 'Lowest Amount', ExpenseSortOrder.amountLowest, currentSort, Icons.money_off),
+              _buildSortOption(context, ref, 'A to Z', ExpenseSortOrder.atoz, currentSort, Icons.sort_by_alpha),
+              _buildSortOption(context, ref, 'Z to A', ExpenseSortOrder.ztoa, currentSort, Icons.sort_by_alpha),
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSortOption(BuildContext context, WidgetRef ref, String title, ExpenseSortOrder order, ExpenseSortOrder currentSort, IconData icon) {
+    final isSelected = order == currentSort;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    
+    return ListTile(
+      leading: Icon(icon, color: isSelected ? const Color(0xFF6366F1) : (isDark ? Colors.grey[400] : Colors.grey[600])),
+      title: Text(
+        title,
+        style: TextStyle(
+          color: isSelected ? const Color(0xFF6366F1) : (isDark ? Colors.white : Colors.black),
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+      trailing: isSelected ? const Icon(Icons.check, color: Color(0xFF6366F1)) : null,
+      onTap: () {
+        ref.read(expenseSortOrderProvider.notifier).state = order;
+        Navigator.pop(context);
+      },
+    );
+  }
+
 
   Widget _buildSummaryColumn(BuildContext context, String label, double amount, Color valueColor) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -456,9 +551,10 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
 
   Widget _buildExpensesPage(String category, List<Expense> allExpenses, Set<String> selectedExpenses, bool isSelectionMode) {
 
-    final showGrouped = ref.watch(showGroupedExpensesProvider);
+    final sortOrder = ref.watch(expenseSortOrderProvider);
+    final showGrouped = ref.watch(showGroupedExpensesProvider) && 
+        (sortOrder == ExpenseSortOrder.dateNewest || sortOrder == ExpenseSortOrder.dateOldest);
     final query = ref.watch(searchQueryProvider).toLowerCase();
-    final sortOrder = ref.watch(sortOrderProvider);
     final showFavs = ref.watch(showFavoritesOnlyProvider);
     
     final filteredExpenses = allExpenses.where((e) {
@@ -473,14 +569,13 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
       if (a.isPinned && !b.isPinned) return -1;
       if (!a.isPinned && b.isPinned) return 1;
       
-
-      
       switch (sortOrder) {
-        case NoteSortOrder.dateNewest: return b.date.compareTo(a.date);
-        case NoteSortOrder.dateOldest: return a.date.compareTo(b.date);
-        case NoteSortOrder.atoz: return a.title.toLowerCase().compareTo(b.title.toLowerCase());
-        case NoteSortOrder.ztoa: return b.title.toLowerCase().compareTo(a.title.toLowerCase());
-        default: return showGrouped ? a.date.compareTo(b.date) : b.date.compareTo(a.date);
+        case ExpenseSortOrder.dateNewest: return b.date.compareTo(a.date);
+        case ExpenseSortOrder.dateOldest: return a.date.compareTo(b.date);
+        case ExpenseSortOrder.amountHighest: return b.amount.compareTo(a.amount);
+        case ExpenseSortOrder.amountLowest: return a.amount.compareTo(b.amount);
+        case ExpenseSortOrder.atoz: return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+        case ExpenseSortOrder.ztoa: return b.title.toLowerCase().compareTo(a.title.toLowerCase());
       }
     });
 

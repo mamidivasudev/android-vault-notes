@@ -142,20 +142,7 @@ class NoteCard extends ConsumerWidget {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Camera / OCR shortcut — left of ❤️
-                    GestureDetector(
-                      onTap: onCameraTap,
-                      child: Padding(
-                        padding: const EdgeInsets.only(left: 4),
-                        child: Icon(
-                          Icons.camera_alt_outlined,
-                          size: 16,
-                          color: isDark
-                              ? Colors.white38
-                              : const Color(0xFF94A3B8),
-                        ),
-                      ),
-                    ),
+
                     if (note.isPinned)
                       const Icon(Icons.push_pin, size: 16, color: Color(0xFF1D63D2)),
                     if (note.isFavorite)

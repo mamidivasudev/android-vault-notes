@@ -416,6 +416,16 @@ void showNoteOptions(BuildContext context, WidgetRef ref, Note note) {
           ),
           if (!note.isLocked) ...[
             ListTile(
+              leading: const Icon(Icons.camera_alt_outlined, color: Color(0xFF1D63D2)),
+              title: const Text('Scan Text (OCR)'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (context) => NoteEditor(note: note, openOcrOnStart: true)),
+                );
+              },
+            ),
+            ListTile(
               leading: Icon(note.isPinned ? Icons.push_pin : Icons.push_pin_outlined, color: const Color(0xFF1D63D2)),
               title: Text(note.isPinned ? 'Unpin' : 'Pin'),
               onTap: () {

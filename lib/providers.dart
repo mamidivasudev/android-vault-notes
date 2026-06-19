@@ -68,6 +68,7 @@ class ExpenseBudgetNotifier extends Notifier<Map<String, double>> {
 }
 
 enum NoteSortOrder { dateNewest, dateOldest, atoz, ztoa, manual }
+enum ExpenseSortOrder { dateNewest, dateOldest, amountHighest, amountLowest, atoz, ztoa }
 
 class SearchQueryNotifier extends Notifier<String> {
   @override
@@ -120,6 +121,35 @@ class SortOrderNotifier extends Notifier<NoteSortOrder> {
   }
 }
 final sortOrderProvider = NotifierProvider<SortOrderNotifier, NoteSortOrder>(SortOrderNotifier.new);
+
+class ExpenseSortOrderNotifier extends Notifier<ExpenseSortOrder> {
+  static const _key = 'expense_sort_order';
+  @override
+  ExpenseSortOrder build() {
+    _load();
+    return ExpenseSortOrder.dateNewest;
+  }
+  
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final index = prefs.getInt(_key);
+    if (index != null && index < ExpenseSortOrder.values.length) {
+      state = ExpenseSortOrder.values[index];
+    }
+  }
+
+  @override
+  set state(ExpenseSortOrder value) {
+    super.state = value;
+    _save(value);
+  }
+
+  Future<void> _save(ExpenseSortOrder value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_key, value.index);
+  }
+}
+final expenseSortOrderProvider = NotifierProvider<ExpenseSortOrderNotifier, ExpenseSortOrder>(ExpenseSortOrderNotifier.new);
 
 class FontSizeNotifier extends Notifier<double> {
   static const _key = 'app_font_size';

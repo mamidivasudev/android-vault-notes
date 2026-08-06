@@ -42,12 +42,6 @@ class _NotesViewState extends ConsumerState<NotesView> {
     
     final fullCategories = categories;
 
-    // Fallback if selected category is invalid or empty
-    if (fullCategories.isNotEmpty && (selectedCat.isEmpty || !fullCategories.contains(selectedCat))) {
-      Future.microtask(() {
-        if (mounted) ref.read(selectedCategoryProvider.notifier).state = fullCategories.first;
-      });
-    }
     final currentSelectedCat = (fullCategories.isNotEmpty && (selectedCat.isEmpty || !fullCategories.contains(selectedCat))) ? fullCategories.first : selectedCat;
 
     // Sync PageController if category changes externally

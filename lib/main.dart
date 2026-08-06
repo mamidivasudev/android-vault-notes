@@ -8,7 +8,6 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'dart:async';
-import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models.dart';
 import 'providers.dart';
@@ -417,8 +416,9 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     final selectedExpenses = ref.watch(selectedExpensesProvider);
     final selectedLinks = ref.watch(selectedLinksProvider);
     final selectedReminders = ref.watch(selectedRemindersProvider);
+    final selectedBills = ref.watch(selectedBillsProvider);
     final isEditingTable = ref.watch(editingTableProvider) != null;
-    final isSelectionMode = selectedNotes.isNotEmpty || selectedExpenses.isNotEmpty || selectedLinks.isNotEmpty || selectedReminders.isNotEmpty;
+    final isSelectionMode = selectedNotes.isNotEmpty || selectedExpenses.isNotEmpty || selectedLinks.isNotEmpty || selectedReminders.isNotEmpty || selectedBills.isNotEmpty;
 
     return PopScope(
       canPop: false,
@@ -469,7 +469,13 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
         body: _buildBody(),
         bottomNavigationBar: (isSelectionMode || isEditingTable || (_currentIndex > 3 && _currentIndex != 7 && _currentIndex != 8 && _currentIndex != 9))
             ? null 
-            : NavigationBar(
+            : NavigationBarTheme(
+                data: NavigationBarThemeData(
+                  labelTextStyle: WidgetStateProperty.all(
+                    const TextStyle(fontSize: 11),
+                  ),
+                ),
+                child: NavigationBar(
                 selectedIndex: _currentIndex == 7 ? 4 : (_currentIndex == 8 ? 5 : (_currentIndex == 9 ? 6 : _currentIndex)),
                 onDestinationSelected: (index) {
                   setState(() {
@@ -499,6 +505,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                   NavigationDestination(icon: Icon(Icons.two_wheeler_outlined), selectedIcon: Icon(Icons.two_wheeler), label: 'Mileage'),
                 ],
               ),
+            ),
         floatingActionButton: isSelectionMode || isEditingTable || _currentIndex == 4 || _currentIndex == 8 || _currentIndex == 9
             ? null 
             : FloatingActionButton(
@@ -1698,10 +1705,12 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
           ref.read(selectedExpensesProvider.notifier).clear();
           ref.read(selectedLinksProvider.notifier).clear();
           ref.read(selectedRemindersProvider.notifier).clear();
+          ref.read(selectedBillsProvider.notifier).clear();
         }),
         title: Text(() {
           if (_currentIndex == 0) return '$noteCount selected';
           if (_currentIndex == 1) return '$expCount selected';
+          if (_currentIndex == 4) return '${ref.watch(selectedBillsProvider).length} selected';
           if (_currentIndex == 5) return '${ref.watch(selectedRemindersProvider).length} selected';
           return '${ref.watch(selectedLinksProvider).length} selected';
         }()),
@@ -1712,9 +1721,11 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                 ? _selectAllNotes 
                 : (_currentIndex == 1 
                     ? _selectAllExpenses 
-                    : (_currentIndex == 5 
-                        ? _selectAllReminders 
-                        : _selectAllLinks)),
+                    : (_currentIndex == 4
+                        ? _selectAllBills
+                        : (_currentIndex == 5 
+                            ? _selectAllReminders 
+                            : _selectAllLinks))),
           ),
           IconButton(
             icon: const Icon(Icons.delete, color: Colors.red),
@@ -1722,9 +1733,11 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                 ? _deleteSelectedNotes 
                 : (_currentIndex == 1 
                     ? _deleteSelectedExpenses 
-                    : (_currentIndex == 5 
-                        ? _deleteSelectedReminders 
-                        : _deleteSelectedLinks)),
+                    : (_currentIndex == 4
+                        ? _deleteSelectedBills
+                        : (_currentIndex == 5 
+                            ? _deleteSelectedReminders 
+                            : _deleteSelectedLinks))),
           ),
           if (_currentIndex != 5)
             IconButton(
@@ -2173,10 +2186,15 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
   }
 
   void _selectAllReminders() {
-    final reminders = ref.read(remindersProvider);
-    final selectedIds = reminders.map((r) => r.id).toSet();
-    ref.read(selectedRemindersProvider.notifier).selectAll(selectedIds);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${selectedIds.length} reminders selected')));
+    final ids = ref.read(remindersProvider).map((r) => r.id).toSet();
+    ref.read(selectedRemindersProvider.notifier).selectAll(ids);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${ids.length} reminders selected')));
+  }
+
+  void _selectAllBills() {
+    final ids = ref.read(billsProvider).map((b) => b.id).toSet();
+    ref.read(selectedBillsProvider.notifier).selectAll(ids);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${ids.length} bills selected')));
   }
 
   void _deleteSelectedNotes() {
@@ -2253,6 +2271,26 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
             ref.read(selectedRemindersProvider.notifier).clear();
             Navigator.pop(context);
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${selectedIds.length} reminders permanently deleted')));
+          }, child: const Text('Delete', style: TextStyle(color: Colors.red))),
+        ],
+      ),
+    );
+  }
+
+  void _deleteSelectedBills() {
+    final selectedIds = ref.read(selectedBillsProvider).toList();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Bills?'),
+        content: Text('Move ${selectedIds.length} bills to Recycle Bin?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(onPressed: () {
+            ref.read(billsProvider.notifier).deleteBills(selectedIds);
+            ref.read(selectedBillsProvider.notifier).clear();
+            Navigator.pop(context);
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${selectedIds.length} bills moved to Recycle Bin')));
           }, child: const Text('Delete', style: TextStyle(color: Colors.red))),
         ],
       ),

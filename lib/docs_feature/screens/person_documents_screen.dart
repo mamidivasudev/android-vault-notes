@@ -18,10 +18,10 @@ class PersonDocumentsScreen extends StatefulWidget {
   final String personName;
 
   const PersonDocumentsScreen({
-    Key? key,
+    super.key,
     required this.categoryName,
     required this.personName,
-  }) : super(key: key);
+  });
 
   @override
   State<PersonDocumentsScreen> createState() => _PersonDocumentsScreenState();

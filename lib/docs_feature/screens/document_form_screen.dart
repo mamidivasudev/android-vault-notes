@@ -22,11 +22,11 @@ class DocumentFormScreen extends StatefulWidget {
   final String? initialPerson;
 
   const DocumentFormScreen({
-    Key? key,
+    super.key,
     this.existingDocument,
     this.initialCategory,
     this.initialPerson,
-  }) : super(key: key);
+  });
 
   @override
   _DocumentFormScreenState createState() => _DocumentFormScreenState();
@@ -469,7 +469,7 @@ class _DocumentFormScreenState extends State<DocumentFormScreen> {
 
             // Person dropdown
             DropdownButtonFormField<String>(
-              value: _selectedPerson,
+              initialValue: _selectedPerson,
               style: GoogleFonts.inter(color: Colors.white, fontSize: 15),
               dropdownColor: AppColors.surface,
               icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppColors.textMuted),
@@ -512,7 +512,7 @@ class _DocumentFormScreenState extends State<DocumentFormScreen> {
 
             // Category dropdown
             DropdownButtonFormField<String>(
-              value: _selectedCategory,
+              initialValue: _selectedCategory,
               style: GoogleFonts.inter(color: Colors.white, fontSize: 15),
               dropdownColor: AppColors.surface,
               icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppColors.textMuted),

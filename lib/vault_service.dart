@@ -350,8 +350,8 @@ class VaultService {
       'month': month,
       'credit': credit,
       'loan': loan,
-      if (creditDetails != null) 'creditDetails': creditDetails,
-      if (loanDetails != null) 'loanDetails': loanDetails,
+      'creditDetails': ?creditDetails,
+      'loanDetails': ?loanDetails,
       'savedAt': DateTime.now().toIso8601String(),
     };
     if (keyExists >= 0) {

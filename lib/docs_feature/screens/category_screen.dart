@@ -13,7 +13,7 @@ import 'person_documents_screen.dart';
 class CategoryScreen extends StatelessWidget {
   final String categoryName;
 
-  const CategoryScreen({Key? key, required this.categoryName}) : super(key: key);
+  const CategoryScreen({super.key, required this.categoryName});
 
   @override
   Widget build(BuildContext context) {

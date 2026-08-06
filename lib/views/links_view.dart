@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:any_link_preview/any_link_preview.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import '../providers.dart';
 import '../models.dart';
 import '../dialogs/link_dialog.dart';
@@ -45,12 +46,6 @@ class _LinksViewState extends ConsumerState<LinksView> {
     
     final fullCategories = ['All', ...categories.where((c) => c != 'General')];
 
-    // Fallback if selected category is invalid or empty
-    if (fullCategories.isNotEmpty && (selectedCat.isEmpty || !fullCategories.contains(selectedCat))) {
-      Future.microtask(() {
-        if (mounted) ref.read(selectedLinkCategoryProvider.notifier).state = fullCategories.first;
-      });
-    }
     final currentSelectedCat = (fullCategories.isNotEmpty && (selectedCat.isEmpty || !fullCategories.contains(selectedCat))) ? fullCategories.first : selectedCat;
 
     // Sync PageController if category changes externally
@@ -152,11 +147,12 @@ class _LinksViewState extends ConsumerState<LinksView> {
                       }
                     },
                     onLongPress: () {
+                      HapticFeedback.mediumImpact();
                       if (!isSelectionMode) {
                         ref.read(selectedLinksProvider.notifier).toggle(link.id);
                       }
                     },
-                  );
+                  ).animate().fadeIn(delay: (50 * index).ms, duration: 300.ms).slideY(begin: 0.1, end: 0, curve: Curves.easeOut);
                 },
               );
             },
@@ -192,7 +188,6 @@ class _LinkCard extends ConsumerWidget {
   final bool isSelectionMode;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
-  final Widget? trailing;
 
   const _LinkCard({
     super.key,
@@ -201,7 +196,6 @@ class _LinkCard extends ConsumerWidget {
     required this.isSelectionMode,
     required this.onTap,
     required this.onLongPress,
-    this.trailing,
   });
 
   @override
@@ -329,9 +323,8 @@ class _LinkCard extends ConsumerWidget {
                     ),
                   ],
                 ),
-              if (trailing != null) trailing!,
-                ],
-              ),
+              ],
+            ),
               if (showPreviews && !link.isLocked)
                 Padding(
                   padding: const EdgeInsets.only(top: 12, bottom: 4),

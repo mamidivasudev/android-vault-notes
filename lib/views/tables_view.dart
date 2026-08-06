@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import '../models.dart';
 import '../providers.dart';
 import '../widgets/category_chip_bar.dart';
@@ -51,12 +52,6 @@ class _TablesViewState extends ConsumerState<TablesView> {
 
     final fullCategories = categories;
 
-    // Fallback if selected category is invalid or empty
-    if (fullCategories.isNotEmpty && (selectedCat.isEmpty || !fullCategories.contains(selectedCat))) {
-      Future.microtask(() {
-        if (mounted) ref.read(selectedTableCategoryProvider.notifier).state = fullCategories.first;
-      });
-    }
     final currentSelectedCat = (fullCategories.isNotEmpty && (selectedCat.isEmpty || !fullCategories.contains(selectedCat))) ? fullCategories.first : selectedCat;
 
     // Sync PageController
@@ -145,7 +140,10 @@ class _TablesViewState extends ConsumerState<TablesView> {
                 itemCount: filteredTables.length,
                 itemBuilder: (context, index) {
                   final table = filteredTables[index];
-                  return _TableCard(table: table, baseFontSize: baseFontSize);
+                  return _TableCard(table: table, baseFontSize: baseFontSize)
+                      .animate()
+                      .fadeIn(delay: (50 * index).ms, duration: 300.ms)
+                      .slideY(begin: 0.1, end: 0, curve: Curves.easeOut);
                 },
               );
             },

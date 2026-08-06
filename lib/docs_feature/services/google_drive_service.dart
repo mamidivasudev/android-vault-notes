@@ -5,7 +5,6 @@ import 'package:extension_google_sign_in_as_googleapis_auth/extension_google_sig
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive_io.dart';
 import 'package:hive/hive.dart';
-import 'package:path/path.dart' as p;
 
 class GoogleDriveService {
   final GoogleSignIn _googleSignIn = GoogleSignIn(

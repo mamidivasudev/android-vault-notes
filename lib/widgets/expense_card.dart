@@ -196,7 +196,7 @@ class ExpenseCard extends ConsumerWidget {
                     ),
                   ],
                 ),
-              if (trailing != null) trailing!,
+              ?trailing,
             ],
           ),
         ),

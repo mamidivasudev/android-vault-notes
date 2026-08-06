@@ -20,23 +20,10 @@ class BillsView extends ConsumerStatefulWidget {
 }
 
 class _BillsViewState extends ConsumerState<BillsView> {
-  final Set<String> _selectedIds = {};
   int _viewTab = 0; // 0 for list view, 1 for calendar view
   bool _creditBillsExpanded = false;
   bool _loanBillsExpanded = false;
   bool _otherBillsExpanded = false;
-
-  bool get _isSelectionMode => _selectedIds.isNotEmpty;
-
-  void _toggleSelection(String id) {
-    setState(() {
-      if (_selectedIds.contains(id)) {
-        _selectedIds.remove(id);
-      } else {
-        _selectedIds.add(id);
-      }
-    });
-  }
 
   Future<void> _showMonthlyReport(List<Bill> allBills) async {
     final currentCreditBills = allBills.where((b) => (b.type ?? 'Credit Card') == 'Credit Card').toList();
@@ -95,13 +82,21 @@ class _BillsViewState extends ConsumerState<BillsView> {
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (ctx) => StatefulBuilder(builder: (ctx, setModalState) {
-        final start = DateTime(2026, 5, 1);
-        final end = DateTime(2028, 5, 1);
+        DateTime start;
+        final paidBills = allBills.where((b) => b.lastPaidDate != null).toList();
+        if (paidBills.isEmpty) {
+          start = DateTime(DateTime.now().year, 1, 1);
+        } else {
+          final sorted = List<Bill>.from(paidBills)..sort((a, b) => a.lastPaidDate!.compareTo(b.lastPaidDate!));
+          start = DateTime(sorted.first.lastPaidDate!.year, sorted.first.lastPaidDate!.month, 1);
+        }
+        // End date is current month + 1 year
+        final end = DateTime(DateTime.now().year, DateTime.now().month, 1).add(const Duration(days: 365));
         final monthsCount =
             (end.year - start.year) * 12 + (end.month - start.month) + 1;
         final months = List.generate(monthsCount, (i) {
           final dt = DateTime(start.year, start.month + i, 1);
-          final label = DateFormat.MMM().format(dt) + ' ${dt.year}';
+          final label = '${DateFormat.MMM().format(dt)} ${dt.year}';
           final found = reports.firstWhere(
                   (r) => r['year'] == dt.year && r['month'] == dt.month,
               orElse: () => <String, dynamic>{});
@@ -709,40 +704,6 @@ class _BillsViewState extends ConsumerState<BillsView> {
     );
   }
 
-  void _clearSelection() => setState(() => _selectedIds.clear());
-
-  void _deleteSelected() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-            'Delete ${_selectedIds.length} Bill${_selectedIds.length > 1 ? "s" : ""}?'),
-        content:
-        const Text('This will remove the selected bills and their reminders.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              for (final id in _selectedIds) {
-                ref.read(billsProvider.notifier).deleteBill(id);
-                NotificationService().cancelBillNotifications(id);
-              }
-              _clearSelection();
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('Bills deleted'),
-                  duration: Duration(milliseconds: 1500)));
-            },
-            child:
-            const Text('Delete', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _markBillAsPaid(Bill bill) {
     ref.read(billsProvider.notifier).markAsPaid(bill.id);
     ScaffoldMessenger.of(context).showSnackBar(
@@ -905,29 +866,6 @@ class _BillsViewState extends ConsumerState<BillsView> {
 
     return Scaffold(
       backgroundColor: Colors.transparent,
-      appBar: _isSelectionMode
-          ? AppBar(
-        leading: IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: _clearSelection),
-        title: Text('${_selectedIds.length} selected'),
-        backgroundColor: const Color(0xFF1D63D2),
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.select_all),
-            tooltip: 'Select All',
-            onPressed: () => setState(
-                    () => _selectedIds.addAll(bills.map((b) => b.id))),
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: 'Delete Selected',
-            onPressed: _deleteSelected,
-          ),
-        ],
-      )
-          : null,
       body: bills.isEmpty
           ? Center(
         child: Column(
@@ -1174,7 +1112,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                                           ));
                                                     }
                                                   },
-                                                  activeColor:
+                                                  activeThumbColor:
                                                   const Color(
                                                       0xFF1D63D2),
                                                 ),
@@ -1376,7 +1314,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Bills due on the ${day}${_getSuffix(day)}',
+            Text('Bills due on the $day${_getSuffix(day)}',
                 style: const TextStyle(
                     fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
@@ -1444,7 +1382,9 @@ class _BillsViewState extends ConsumerState<BillsView> {
     final isOverdue = daysLeft == 0 && !bill.isPaid;
     final isWarning =
         daysLeft <= bill.reminderDaysBefore && !bill.isPaid;
-    final isSelected = _selectedIds.contains(bill.id);
+    final selectedBills = ref.watch(selectedBillsProvider);
+    final isSelected = selectedBills.contains(bill.id);
+    final isSelectionMode = selectedBills.isNotEmpty;
 
     Color statusColor;
     String statusText;
@@ -1481,8 +1421,8 @@ class _BillsViewState extends ConsumerState<BillsView> {
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: () {
-          if (_isSelectionMode) {
-            _toggleSelection(bill.id);
+          if (isSelectionMode) {
+            ref.read(selectedBillsProvider.notifier).toggle(bill.id);
           } else {
             showDialog(
                 context: context,
@@ -1491,13 +1431,13 @@ class _BillsViewState extends ConsumerState<BillsView> {
         },
         onLongPress: () {
           HapticFeedback.mediumImpact();
-          _toggleSelection(bill.id);
+          ref.read(selectedBillsProvider.notifier).toggle(bill.id);
         },
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
             children: [
-              if (_isSelectionMode)
+              if (isSelectionMode)
                 Padding(
                   padding: const EdgeInsets.only(right: 12),
                   child: AnimatedContainer(
@@ -1588,7 +1528,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                   ],
                 ),
               ),
-              if (!_isSelectionMode) ...[
+              if (!isSelectionMode) ...[
                 if (bill.amount > 0) ...[
                   Text(
                       '₹${NumberFormat.decimalPattern('en_IN').format(bill.amount)}',
@@ -1843,12 +1783,11 @@ class _SummaryChip extends StatelessWidget {
 
 class _StickyHeaderDelegate extends SliverPersistentHeaderDelegate {
   final Widget child;
-  final double height;
+  final double height = 48.0;
   final Color backgroundColor;
 
   _StickyHeaderDelegate({
     required this.child,
-    this.height = 44.0,
     required this.backgroundColor,
   });
 

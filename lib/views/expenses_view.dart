@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import 'package:flutter/services.dart';
 import '../models.dart';
 import '../providers.dart';
 import '../widgets/category_chip_bar.dart';
@@ -58,13 +60,6 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
 
     final fullCategories = categories;
 
-    // Fallback if selected category is invalid (but not empty, which means it is still loading)
-    if (categories.isNotEmpty && selectedCat.isNotEmpty && !categories.contains(selectedCat)) {
-      Future.microtask(() {
-        if (mounted) ref.read(selectedExpenseCategoryProvider.notifier).state = categories.first;
-      });
-    }
-    
     final currentSelectedCat = (categories.isNotEmpty && (selectedCat.isEmpty || !categories.contains(selectedCat))) 
         ? categories.first 
         : selectedCat;
@@ -615,13 +610,12 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
               }
             },
             onLongPress: () {
-              if (!isSelectionMode) {
-                ref.read(selectedExpensesProvider.notifier).toggle(exp.id);
-              }
+              HapticFeedback.mediumImpact();
+              ref.read(selectedExpensesProvider.notifier).toggle(exp.id);
             },
             onCheckboxChanged: (val) => ref.read(selectedExpensesProvider.notifier).toggle(exp.id),
             onMorePressed: () => showExpenseOptions(context, ref, exp),
-          );
+          ).animate().fadeIn(delay: (50 * index).ms, duration: 300.ms).slideY(begin: 0.1, end: 0, curve: Curves.easeOut);
         },
       );
     }

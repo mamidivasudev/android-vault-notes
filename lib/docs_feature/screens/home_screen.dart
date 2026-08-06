@@ -145,7 +145,7 @@ class _DocsHomeScreenState extends State<DocsHomeScreen> with SingleTickerProvid
                               crossAxisCount: 3,
                               crossAxisSpacing: 12,
                               mainAxisSpacing: 12,
-                              childAspectRatio: 0.75,
+                              childAspectRatio: 0.65,
                             ),
                             itemCount: filteredCategories.length,
                             itemBuilder: (context, index) {
@@ -153,7 +153,10 @@ class _DocsHomeScreenState extends State<DocsHomeScreen> with SingleTickerProvid
                               final docs = allDocs
                                   .where((d) => d.category == category)
                                   .toList();
-                              return _buildCategoryCard(context, category, docs, index);
+                              return _buildCategoryCard(context, category, docs, index)
+                                  .animate()
+                                  .fadeIn(delay: (50 * index).ms, duration: 300.ms)
+                                  .slideY(begin: 0.1, end: 0, curve: Curves.easeOut);
                             },
                           ),
                   ),
@@ -368,7 +371,7 @@ class _DocsHomeScreenState extends State<DocsHomeScreen> with SingleTickerProvid
         SlideRoute(page: CategoryScreen(categoryName: category)),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

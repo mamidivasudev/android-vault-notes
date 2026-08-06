@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:fl_chart/fl_chart.dart';
 import 'package:path_provider/path_provider.dart';
 
 
@@ -204,8 +203,12 @@ class _MileageViewState extends ConsumerState<MileageView> {
         final imported = decoded.map((e) => FuelEntry.fromJson(e)).toList();
         final current = ref.read(fuelEntriesProvider);
         final Map<String, FuelEntry> unique = {};
-        for (var e in current) unique['${e.date}_${e.odometer}'] = e;
-        for (var e in imported) unique['${e.date}_${e.odometer}'] = e;
+        for (var e in current) {
+          unique['${e.date}_${e.odometer}'] = e;
+        }
+        for (var e in imported) {
+          unique['${e.date}_${e.odometer}'] = e;
+        }
         final newEntries = unique.values.toList();
         newEntries.sort((a, b) => a.date.compareTo(b.date));
         ref.read(fuelEntriesProvider.notifier).setEntries(newEntries);
@@ -352,13 +355,18 @@ class _MileageViewState extends ConsumerState<MileageView> {
     final remaining = nextService - currentOdo;
     
     Color color = Colors.green;
-    String text = 'Next service due in ${remaining.toStringAsFixed(0)} km';
+    String kmNum = remaining.abs().toStringAsFixed(0);
+    String prefixText = 'Next service due in ';
+    String suffixText = '';
+    
     if (remaining <= 0) {
       color = Colors.red;
-      text = 'Service is OVERDUE by ${(-remaining).toStringAsFixed(0)} km!';
+      prefixText = 'Service is OVERDUE by ';
+      suffixText = '!';
     } else if (remaining < 300) {
       color = Colors.orange;
-      text = 'Next service due VERY SOON (${remaining.toStringAsFixed(0)} km)';
+      prefixText = 'Next service due VERY SOON (';
+      suffixText = ')';
     }
 
     return Container(
@@ -369,7 +377,19 @@ class _MileageViewState extends ConsumerState<MileageView> {
         children: [
           Icon(Icons.build, color: color),
           const SizedBox(width: 12),
-          Expanded(child: Text(text, style: TextStyle(color: color, fontWeight: FontWeight.bold))),
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                style: TextStyle(color: color, fontWeight: FontWeight.bold),
+                children: [
+                  TextSpan(text: prefixText),
+                  TextSpan(text: kmNum, style: const TextStyle(color: Colors.redAccent, fontSize: 15)),
+                  const TextSpan(text: ' km', style: TextStyle(color: Colors.green, fontSize: 15)),
+                  TextSpan(text: suffixText),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -386,70 +406,68 @@ class _MileageViewState extends ConsumerState<MileageView> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF080C1F),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: false,
+        titleSpacing: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.menu, color: Colors.white),
+          onPressed: () => Scaffold.of(context).openDrawer(),
+          tooltip: 'Menu',
+        ),
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(top: 2.0),
+                  child: Icon(Icons.two_wheeler, color: Colors.white70, size: 20),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _getBikeAgeString(entries),
+                    style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.4, fontWeight: FontWeight.w500),
+                  ),
+                ),
+              ],
+            ),
+            if (airMessage != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                airMessage,
+                style: const TextStyle(color: Colors.orangeAccent, fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+            ]
+          ],
+        ),
+        actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert, color: Colors.white),
+            onSelected: (value) {
+              if (value == 'settings') {
+                _openSettings();
+              } else if (value == 'share') _exportData(entries);
+              else if (value == 'import') _restoreData();
+              else if (value == 'export') _backupData();
+            },
+            color: const Color(0xFF0F1530),
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'settings', child: Text('Service Details', style: TextStyle(color: Colors.white))),
+              const PopupMenuItem(value: 'share', child: Text('Share (Text)', style: TextStyle(color: Colors.white))),
+              const PopupMenuItem(value: 'import', child: Text('Import Data (JSON)', style: TextStyle(color: Colors.white))),
+              const PopupMenuItem(value: 'export', child: Text('Export Data (JSON)', style: TextStyle(color: Colors.white))),
+            ],
+          ),
+        ],
+      ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-              color: Colors.transparent,
-              padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 16, 16, 8),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Builder(
-                    builder: (ctx) => IconButton(
-                      icon: const Icon(Icons.menu, color: Colors.white),
-                      onPressed: () => Scaffold.of(ctx).openDrawer(),
-                      tooltip: 'Menu',
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.two_wheeler, color: Colors.white70, size: 20),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                _getBikeAgeString(entries),
-                                style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.4, fontWeight: FontWeight.w500),
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (airMessage != null) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            airMessage,
-                            style: const TextStyle(color: Colors.orangeAccent, fontSize: 14, fontWeight: FontWeight.bold),
-                          ),
-                        ]
-                      ],
-                    ),
-                  ),
-                  PopupMenuButton<String>(
-                    icon: const Icon(Icons.more_vert, color: Colors.white),
-                    onSelected: (value) {
-                      if (value == 'settings') _openSettings();
-                      else if (value == 'share') _exportData(entries);
-                      else if (value == 'import') _restoreData();
-                      else if (value == 'export') _backupData();
-                    },
-                    color: const Color(0xFF0F1530),
-                    itemBuilder: (context) => [
-                      const PopupMenuItem(value: 'settings', child: Text('Service Details', style: TextStyle(color: Colors.white))),
-                      const PopupMenuItem(value: 'share', child: Text('Share (Text)', style: TextStyle(color: Colors.white))),
-                      const PopupMenuItem(value: 'import', child: Text('Import Data (JSON)', style: TextStyle(color: Colors.white))),
-                      const PopupMenuItem(value: 'export', child: Text('Export Data (JSON)', style: TextStyle(color: Colors.white))),
-                    ],
-                  ),
-                ],
-              ),
-          ),
           _buildServiceReminder(entries) ?? const SizedBox.shrink(),
           Padding(
               padding: const EdgeInsets.all(16),
@@ -532,7 +550,7 @@ class _MileageViewState extends ConsumerState<MileageView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700), maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(label, style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.w700), maxLines: 1, overflow: TextOverflow.ellipsis),
           const SizedBox(height: 6),
           FittedBox(
             fit: BoxFit.scaleDown,
@@ -581,7 +599,7 @@ class _MonthSection extends StatelessWidget {
       ),
       child: ExpansionTile(
         title: Text(month, style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold)),
-        subtitle: Text('${totalKm} entr${totalKm == 1 ? 'y' : 'ies'} · ${totalRupees.toStringAsFixed(0)} rs', style: const TextStyle(color: Colors.white70)),
+        subtitle: Text('$totalKm entr${totalKm == 1 ? 'y' : 'ies'} · ${totalRupees.toStringAsFixed(0)} rs', style: const TextStyle(color: Colors.white70)),
         children: [
           for (int i = 0; i < entries.length; i++) ...[
             if (i > 0)
@@ -594,7 +612,7 @@ class _MonthSection extends StatelessWidget {
                 children: [
                   const SizedBox(height: 4),
                   Text('Odometer : ${entries[i].odometer.toStringAsFixed(0)} km', style: const TextStyle(color: Colors.white70)),
-                  if (entries[i].liters != null) Text('Liters filled : ${entries[i].liters!.toStringAsFixed(2)} L    Price : ${(entries[i].rupees / entries[i].liters!).toStringAsFixed(0)} rs', style: const TextStyle(color: Colors.white70)),
+                  if (entries[i].liters != null) Text('Liters filled : ${entries[i].liters!.toStringAsFixed(2)} L', style: const TextStyle(color: Colors.white70)),
                   if (entries[i].liters != null)
                     Text('Petrol left : ${(5.1 - entries[i].liters!).toStringAsFixed(2)} L',
                         style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
@@ -617,7 +635,7 @@ class _MonthSection extends StatelessWidget {
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('${entries[i].rupees.toStringAsFixed(0)} rs', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                  Text('${entries[i].rupees.toStringAsFixed(0)} rs', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13)),
                   IconButton(
                     icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
                     onPressed: () => onDelete(entries[i]),
@@ -743,7 +761,7 @@ class _AddEntrySheetState extends State<AddEntrySheet> {
                   title: const Text('Air filled', style: TextStyle(color: Colors.white)),
                   value: _airFilled,
                   onChanged: (val) => setState(() => _airFilled = val),
-                  activeColor: Colors.deepPurple,
+                  activeThumbColor: Colors.deepPurple,
                 ),
                 const SizedBox(height: 10),
                 ElevatedButton(

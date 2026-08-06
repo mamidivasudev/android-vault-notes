@@ -6,8 +6,7 @@ class ExpiryBadge extends StatelessWidget {
   final DateTime? expiryDate;
   final bool compact;
 
-  const ExpiryBadge({Key? key, required this.expiryDate, this.compact = false})
-      : super(key: key);
+  const ExpiryBadge({super.key, required this.expiryDate, this.compact = false});
 
   @override
   Widget build(BuildContext context) {

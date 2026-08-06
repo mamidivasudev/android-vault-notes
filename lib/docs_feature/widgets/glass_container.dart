@@ -13,7 +13,7 @@ class GlassContainer extends StatelessWidget {
   final bool showGlow;
 
   const GlassContainer({
-    Key? key,
+    super.key,
     required this.child,
     this.borderRadius = 18.0,
     this.padding = const EdgeInsets.all(16.0),
@@ -22,7 +22,7 @@ class GlassContainer extends StatelessWidget {
     this.onLongPress,
     this.accentColor,
     this.showGlow = false,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

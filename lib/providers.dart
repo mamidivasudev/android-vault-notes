@@ -1735,7 +1735,24 @@ class BillsNotifier extends Notifier<List<Bill>> {
   Future<void> _load() async {
     final data = await ref.read(vaultServiceProvider).loadVaultData();
     final List<dynamic> jsonList = data['bills'] ?? [];
-    state = jsonList.map((e) => Bill.fromJson(e)).toList();
+    List<Bill> loadedBills = jsonList.map((e) => Bill.fromJson(e)).toList();
+    
+    bool needsSave = false;
+    final now = DateTime.now();
+    for (int i = 0; i < loadedBills.length; i++) {
+      var bill = loadedBills[i];
+      if (bill.isPaid && bill.lastPaidDate != null) {
+        if (bill.lastPaidDate!.month != now.month || bill.lastPaidDate!.year != now.year) {
+          loadedBills[i] = bill.copyWith(isPaid: false);
+          needsSave = true;
+        }
+      }
+    }
+    
+    state = loadedBills;
+    if (needsSave) {
+      _save();
+    }
   }
 
   Future<void> addBill(Bill bill) async {
@@ -1753,6 +1770,12 @@ class BillsNotifier extends Notifier<List<Bill>> {
   Future<void> deleteBill(String id) async {
     await _initFuture;
     state = state.where((b) => b.id != id).toList();
+    _save();
+  }
+
+  Future<void> deleteBills(Iterable<String> ids) async {
+    await _initFuture;
+    state = state.where((b) => !ids.contains(b.id)).toList();
     _save();
   }
 
@@ -1790,6 +1813,25 @@ class SelectedRemindersNotifier extends Notifier<Set<String>> {
 }
 
 final selectedRemindersProvider = NotifierProvider<SelectedRemindersNotifier, Set<String>>(SelectedRemindersNotifier.new);
+
+class SelectedBillsNotifier extends Notifier<Set<String>> {
+  @override
+  Set<String> build() => {};
+
+  void toggle(String id) {
+    if (state.contains(id)) {
+      state = {for (final item in state) if (item != id) item};
+    } else {
+      state = {...state, id};
+    }
+  }
+
+  void clear() => state = {};
+  
+  void selectAll(Set<String> ids) => state = ids;
+}
+
+final selectedBillsProvider = NotifierProvider<SelectedBillsNotifier, Set<String>>(SelectedBillsNotifier.new);
 
 final currentTimeProvider = StreamProvider<DateTime>((ref) {
   return Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now());

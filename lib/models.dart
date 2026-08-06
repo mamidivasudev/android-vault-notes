@@ -627,3 +627,39 @@ class Bill {
         note: note ?? this.note,
       );
 }
+
+class FuelEntry {
+  final String date; // stored as yyyy-MM-dd
+  final double odometer; // km reading at time of entry
+  final double rupees; // amount paid
+  final double? liters; // liters filled (null if not a full-tank fill)
+  final String? comments; // optional comments
+  final bool airFilled;
+
+  FuelEntry({
+    required this.date,
+    required this.odometer,
+    required this.rupees,
+    this.liters,
+    this.comments,
+    this.airFilled = false,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'date': date,
+        'odometer': odometer,
+        'rupees': rupees,
+        'liters': liters,
+        'comments': comments,
+        'airFilled': airFilled,
+      };
+
+  factory FuelEntry.fromJson(Map<String, dynamic> json) => FuelEntry(
+        date: json['date'],
+        odometer: (json['odometer'] as num).toDouble(),
+        rupees: (json['rupees'] as num).toDouble(),
+        liters: json['liters'] == null ? null : (json['liters'] as num).toDouble(),
+        comments: json['comments'] as String?,
+        airFilled: json['airFilled'] as bool? ?? false,
+      );
+}

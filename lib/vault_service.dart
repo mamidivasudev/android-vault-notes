@@ -103,6 +103,7 @@ class VaultService {
         'reminders': [],
         'bills': [],
         'monthlyReports': [],
+        'fuelEntries': [],
         'categories': ['General'],
         'expenseCategories': ['All'],
         'linkCategories': [],
@@ -197,6 +198,22 @@ class VaultService {
           combinedData['monthlyReports'] = data['monthlyReports'] ?? [];
         } catch (e) {
           print('Error loading monthly_reports.json: $e');
+        }
+      }
+
+      // Load Fuel Entries
+      final mileageFile = File('$path/mileage_data.json');
+      if (await mileageFile.exists()) {
+        try {
+          final content = await mileageFile.readAsString();
+          final data = json.decode(content);
+          if (data is List) {
+            combinedData['fuelEntries'] = data;
+          } else if (data is Map) {
+            combinedData['fuelEntries'] = data['fuelEntries'] ?? [];
+          }
+        } catch (e) {
+          print('Error loading mileage_data.json: $e');
         }
       }
 
@@ -301,6 +318,19 @@ class VaultService {
       if (path == null) return;
       final file = File('$path/monthly_reports.json');
       final data = {'monthlyReports': reports};
+      await _atomicWrite(file, json.encode(data));
+    });
+  }
+
+  Future<void> saveFuelEntries(List<FuelEntry> entries) async {
+    _cachedData = null;
+    await _synchronized('mileage_data', () async {
+      final path = await getVaultPath();
+      if (path == null) return;
+      final file = File('$path/mileage_data.json');
+      final data = {
+        'fuelEntries': entries.map((e) => e.toJson()).toList(),
+      };
       await _atomicWrite(file, json.encode(data));
     });
   }

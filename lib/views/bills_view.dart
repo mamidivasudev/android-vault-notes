@@ -555,9 +555,60 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                     crossAxisAlignment: CrossAxisAlignment.center,
                                     children: creditDetails.map((d) => Padding(
                                       padding: const EdgeInsets.only(bottom: 4),
-                                      child: Text('${d['title']}\n${fmt((d['amount'] as num).toDouble())}',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.orange.shade700)),
+                                      child: GestureDetector(
+                                        onTap: () async {
+                                          final amtController = TextEditingController(text: (d['amount'] as num).toDouble().toStringAsFixed(0));
+                                          final res = await showDialog<bool>(
+                                            context: context,
+                                            builder: (dctx) => AlertDialog(
+                                              title: Text('Edit ${d['title']}'),
+                                              content: TextField(
+                                                controller: amtController,
+                                                keyboardType: TextInputType.number,
+                                                decoration: const InputDecoration(labelText: 'Amount'),
+                                              ),
+                                              actions: [
+                                                TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
+                                                TextButton(onPressed: () async {
+                                                  final valStr = amtController.text.replaceAll(RegExp(r'[^0-9.]'), '');
+                                                  final val = double.tryParse(valStr) ?? 0.0;
+                                                  
+                                                  final newDetails = List<Map<String, dynamic>>.from(creditDetails);
+                                                  final idx = newDetails.indexWhere((x) => x['title'] == d['title']);
+                                                  if (idx != -1) {
+                                                    newDetails[idx] = Map<String, dynamic>.from(newDetails[idx])..['amount'] = val;
+                                                  }
+                                                  
+                                                  final newCredit = newDetails.fold<double>(0.0, (s, x) => s + (x['amount'] as num).toDouble());
+                                                  
+                                                  final dtParts = label.split(' ');
+                                                  final mon = DateFormat.MMM().parse(dtParts[0]).month;
+                                                  final yr = int.tryParse(dtParts[1]) ?? DateTime.now().year;
+                                                  
+                                                  await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
+                                                    yr, mon, newCredit, loanVal,
+                                                    creditDetails: newDetails,
+                                                    loanDetails: loanDetails,
+                                                  );
+                                                  Navigator.pop(dctx, true);
+                                                }, child: const Text('Save')),
+                                              ],
+                                            ),
+                                          );
+                                          if (res == true) {
+                                            final newReports = await ref.read(vaultServiceProvider).loadMonthlyReports();
+                                            setModalState(() {
+                                              reports = newReports;
+                                            });
+                                            if (context.mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved')));
+                                            }
+                                          }
+                                        },
+                                        child: Text('${d['title']}\n${fmt((d['amount'] as num).toDouble())}',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.orange.shade700)),
+                                      ),
                                     )).toList(),
                                   ),
                                 ),
@@ -567,9 +618,60 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                     crossAxisAlignment: CrossAxisAlignment.center,
                                     children: loanDetails.map((d) => Padding(
                                       padding: const EdgeInsets.only(bottom: 4),
-                                      child: Text('${d['title']}\n${fmt((d['amount'] as num).toDouble())}',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: const Color(0xFF1D63D2))),
+                                      child: GestureDetector(
+                                        onTap: () async {
+                                          final amtController = TextEditingController(text: (d['amount'] as num).toDouble().toStringAsFixed(0));
+                                          final res = await showDialog<bool>(
+                                            context: context,
+                                            builder: (dctx) => AlertDialog(
+                                              title: Text('Edit ${d['title']}'),
+                                              content: TextField(
+                                                controller: amtController,
+                                                keyboardType: TextInputType.number,
+                                                decoration: const InputDecoration(labelText: 'Amount'),
+                                              ),
+                                              actions: [
+                                                TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
+                                                TextButton(onPressed: () async {
+                                                  final valStr = amtController.text.replaceAll(RegExp(r'[^0-9.]'), '');
+                                                  final val = double.tryParse(valStr) ?? 0.0;
+                                                  
+                                                  final newDetails = List<Map<String, dynamic>>.from(loanDetails);
+                                                  final idx = newDetails.indexWhere((x) => x['title'] == d['title']);
+                                                  if (idx != -1) {
+                                                    newDetails[idx] = Map<String, dynamic>.from(newDetails[idx])..['amount'] = val;
+                                                  }
+                                                  
+                                                  final newLoan = newDetails.fold<double>(0.0, (s, x) => s + (x['amount'] as num).toDouble());
+                                                  
+                                                  final dtParts = label.split(' ');
+                                                  final mon = DateFormat.MMM().parse(dtParts[0]).month;
+                                                  final yr = int.tryParse(dtParts[1]) ?? DateTime.now().year;
+                                                  
+                                                  await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
+                                                    yr, mon, creditVal, newLoan,
+                                                    creditDetails: creditDetails,
+                                                    loanDetails: newDetails,
+                                                  );
+                                                  Navigator.pop(dctx, true);
+                                                }, child: const Text('Save')),
+                                              ],
+                                            ),
+                                          );
+                                          if (res == true) {
+                                            final newReports = await ref.read(vaultServiceProvider).loadMonthlyReports();
+                                            setModalState(() {
+                                              reports = newReports;
+                                            });
+                                            if (context.mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved')));
+                                            }
+                                          }
+                                        },
+                                        child: Text('${d['title']}\n${fmt((d['amount'] as num).toDouble())}',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: const Color(0xFF1D63D2))),
+                                      ),
                                     )).toList(),
                                   ),
                                 ),

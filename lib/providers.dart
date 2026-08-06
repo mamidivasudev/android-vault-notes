@@ -5,6 +5,8 @@ import 'services/google_drive_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 import 'dart:convert';
+import 'docs_feature/services/google_drive_service.dart' as docs_drive;
+import 'package:google_sign_in/google_sign_in.dart';
 
 final vaultServiceProvider = Provider((ref) => VaultService());
 
@@ -1448,6 +1450,11 @@ final vaultPathProvider = FutureProvider<String?>((ref) => ref.watch(vaultServic
 
 final googleDriveServiceProvider = Provider((ref) => GoogleDriveService());
 
+final googleUserProvider = StreamProvider<GoogleSignInAccount?>((ref) {
+  final service = ref.watch(googleDriveServiceProvider);
+  return service.onCurrentUserChanged;
+});
+
 enum SyncStatus { idle, syncing, success, error }
 
 class SyncNotifier extends Notifier<SyncStatus> {
@@ -1476,12 +1483,18 @@ class SyncNotifier extends Notifier<SyncStatus> {
         'tables_data.json',
         'bills_data.json',
         'monthly_reports.json',
+        'mileage_data.json',
+        'docs_data',
       ];
 
       for (final fileName in filesToSync) {
-        final localFile = File('$vaultPath/$fileName');
-        if (await localFile.exists()) {
-          await driveService.uploadFile(localFile, 'vault_notes_backup');
+        if (fileName == 'docs_data') {
+          await docs_drive.GoogleDriveService().backupData();
+        } else {
+          final localFile = File('$vaultPath/$fileName');
+          if (await localFile.exists()) {
+            await driveService.uploadFile(localFile, 'vault_notes_backup');
+          }
         }
       }
 
@@ -1517,11 +1530,17 @@ class SyncNotifier extends Notifier<SyncStatus> {
          'tables_data.json',
          'bills_data.json',
          'monthly_reports.json',
+         'mileage_data.json',
+         'docs_data',
        ];
 
        for (final fileName in filesToSync) {
-         final localFile = File('$vaultPath/$fileName');
-         await driveService.downloadFile(fileName, 'vault_notes_backup', localFile);
+         if (fileName == 'docs_data') {
+           await docs_drive.GoogleDriveService().restoreData();
+         } else {
+           final localFile = File('$vaultPath/$fileName');
+           await driveService.downloadFile(fileName, 'vault_notes_backup', localFile);
+         }
        }
 
        // Refresh data
@@ -1531,6 +1550,7 @@ class SyncNotifier extends Notifier<SyncStatus> {
        ref.invalidate(categoriesProvider);
        ref.invalidate(expenseCategoriesProvider);
        ref.invalidate(linkCategoriesProvider);
+       ref.invalidate(fuelEntriesProvider);
        ref.invalidate(tablesProvider);
        ref.invalidate(tableCategoriesProvider);
        ref.invalidate(billsProvider);
@@ -1781,3 +1801,58 @@ final activeRemindersProvider = Provider<List<Reminder>>((ref) {
   return reminders.where((r) => !r.isDismissed && r.dateTime.isBefore(now)).toList();
 });
 
+class FuelEntriesNotifier extends Notifier<List<FuelEntry>> {
+  Future<void>? _initFuture;
+
+  @override
+  List<FuelEntry> build() {
+    state = [];
+    _initFuture = _load();
+    return state;
+  }
+
+  Future<void> _load() async {
+    final data = await ref.read(vaultServiceProvider).loadVaultData();
+    final list = data['fuelEntries'] as List? ?? [];
+    state = list.map((e) => FuelEntry.fromJson(Map<String, dynamic>.from(e))).toList();
+  }
+
+  Future<void> refresh() async {
+    await _load();
+  }
+
+  Future<void> addEntry(FuelEntry entry) async {
+    await _initFuture;
+    state = [...state, entry]..sort((a, b) => a.date.compareTo(b.date));
+    _save();
+  }
+
+  Future<void> updateEntry(FuelEntry oldEntry, FuelEntry newEntry) async {
+    await _initFuture;
+    final index = state.indexOf(oldEntry);
+    if (index != -1) {
+      final newState = [...state];
+      newState[index] = newEntry;
+      newState.sort((a, b) => a.date.compareTo(b.date));
+      state = newState;
+      _save();
+    }
+  }
+
+  Future<void> deleteEntry(FuelEntry entry) async {
+    await _initFuture;
+    state = state.where((e) => e != entry).toList();
+    _save();
+  }
+
+  Future<void> setEntries(List<FuelEntry> entries) async {
+    state = entries;
+    _save();
+  }
+
+  void _save() {
+    ref.read(vaultServiceProvider).saveFuelEntries(state);
+  }
+}
+
+final fuelEntriesProvider = NotifierProvider<FuelEntriesNotifier, List<FuelEntry>>(FuelEntriesNotifier.new);

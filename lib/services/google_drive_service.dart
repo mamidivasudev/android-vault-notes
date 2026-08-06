@@ -9,10 +9,14 @@ class GoogleDriveService {
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [
       drive.DriveApi.driveFileScope,
+      drive.DriveApi.driveAppdataScope,
     ],
   );
 
   GoogleSignInAccount? _currentUser;
+
+  GoogleSignInAccount? get currentUser => _currentUser;
+  Stream<GoogleSignInAccount?> get onCurrentUserChanged => _googleSignIn.onCurrentUserChanged;
 
   Future<GoogleSignInAccount?> signIn() async {
     try {

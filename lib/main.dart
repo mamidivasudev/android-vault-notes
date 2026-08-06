@@ -22,17 +22,30 @@ import 'views/recycle_bin_view.dart';
 import 'views/note_editor.dart';
 import 'views/reminders_view.dart';
 import 'views/bills_view.dart';
+import 'views/mileage_view.dart';
 import 'main_helpers.dart';
 import 'dialogs/link_dialog.dart';
 import 'dialogs/expense_dialog.dart';
 import 'dialogs/bill_dialog.dart';
 import 'profiles/providers/theme_provider.dart';
 import 'profiles/ui/theme/app_theme.dart';
+import 'package:provider/provider.dart' as doc_provider;
+import 'docs_feature/services/local_storage_service.dart' as doc_storage;
+import 'docs_feature/providers/document_provider.dart';
+import 'docs_feature/screens/home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await NotificationService().init();
-  runApp(const ProviderScope(child: MyNotesApp()));
+  await doc_storage.LocalStorageService.init();
+  runApp(
+    doc_provider.MultiProvider(
+      providers: [
+        doc_provider.ChangeNotifierProvider(create: (_) => DocumentProvider()),
+      ],
+      child: const ProviderScope(child: MyNotesApp()),
+    ),
+  );
 }
 
 class MyNotesApp extends ConsumerWidget {
@@ -452,15 +465,23 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
       },
       child: Scaffold(
         drawer: isEditingTable ? null : _buildDrawer(vaultPath),
-        appBar: isEditingTable ? null : _buildAppBar(isSelectionMode, selectedNotes.length, selectedExpenses.length, vaultPath),
+        appBar: (isEditingTable || _currentIndex == 8 || _currentIndex == 9) ? null : _buildAppBar(isSelectionMode, selectedNotes.length, selectedExpenses.length, vaultPath),
         body: _buildBody(),
-        bottomNavigationBar: (isSelectionMode || isEditingTable || (_currentIndex > 3 && _currentIndex != 7))
+        bottomNavigationBar: (isSelectionMode || isEditingTable || (_currentIndex > 3 && _currentIndex != 7 && _currentIndex != 8 && _currentIndex != 9))
             ? null 
             : NavigationBar(
-                selectedIndex: _currentIndex == 7 ? 4 : _currentIndex,
+                selectedIndex: _currentIndex == 7 ? 4 : (_currentIndex == 8 ? 5 : (_currentIndex == 9 ? 6 : _currentIndex)),
                 onDestinationSelected: (index) {
                   setState(() {
-                    _currentIndex = index == 4 ? 7 : index;
+                    if (index == 4) {
+                      _currentIndex = 7;
+                    } else if (index == 5) {
+                      _currentIndex = 8;
+                    } else if (index == 6) {
+                      _currentIndex = 9;
+                    } else {
+                      _currentIndex = index;
+                    }
                     _isSearching = false;
                     _searchController.clear();
                     ref.read(searchQueryProvider.notifier).state = '';
@@ -474,9 +495,11 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                   NavigationDestination(icon: Icon(Icons.link_outlined), selectedIcon: Icon(Icons.link), label: 'Links'),
                   NavigationDestination(icon: Icon(Icons.table_chart_outlined), selectedIcon: Icon(Icons.table_chart), label: 'Tables'),
                   NavigationDestination(icon: Icon(Icons.receipt_long_outlined), selectedIcon: Icon(Icons.receipt_long), label: 'Bills'),
+                  NavigationDestination(icon: Icon(Icons.folder_outlined), selectedIcon: Icon(Icons.folder), label: 'Docs'),
+                  NavigationDestination(icon: Icon(Icons.two_wheeler_outlined), selectedIcon: Icon(Icons.two_wheeler), label: 'Mileage'),
                 ],
               ),
-        floatingActionButton: isSelectionMode || isEditingTable || _currentIndex == 4
+        floatingActionButton: isSelectionMode || isEditingTable || _currentIndex == 4 || _currentIndex == 8 || _currentIndex == 9
             ? null 
             : FloatingActionButton(
                 onPressed: _handleFabPress,
@@ -497,28 +520,166 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     return Drawer(
       child: Column(
         children: [
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.only(
-              top: MediaQuery.of(context).padding.top + 32,
-              bottom: 32,
-            ),
-            decoration: const BoxDecoration(color: Color(0xFF2A5EAF)),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.account_balance_wallet, color: Colors.white, size: 40),
-                const SizedBox(height: 12),
-                Text(
-                  'My Notes',
-                  style: GoogleFonts.lexend(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
+          Consumer(
+            builder: (context, ref, child) {
+              final googleUserAsync = ref.watch(googleUserProvider);
+              final user = googleUserAsync.value;
+              
+              if (user != null) {
+                return InkWell(
+                  onTap: () async {
+                    await ref.read(googleDriveServiceProvider).signOut();
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.only(
+                      top: MediaQuery.of(context).padding.top + 24,
+                      bottom: 24,
+                      left: 16,
+                      right: 16,
+                    ),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFF2A5EAF), Color(0xFF8B5CF6)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 28,
+                          backgroundColor: Colors.white,
+                          backgroundImage: user.photoUrl != null ? NetworkImage(user.photoUrl!) : null,
+                          child: user.photoUrl == null ? const Icon(Icons.person, color: Color(0xFF2A5EAF)) : null,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                user.displayName ?? 'User',
+                                style: GoogleFonts.lexend(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                user.email,
+                                style: GoogleFonts.lexend(
+                                  color: Colors.white70,
+                                  fontSize: 12,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.cloud_done, color: Colors.white, size: 12),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Drive Connected',
+                                      style: GoogleFonts.lexend(color: Colors.white, fontSize: 10),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
+                );
+              } else {
+                return Container(
+                  width: double.infinity,
+                  padding: EdgeInsets.only(
+                    top: MediaQuery.of(context).padding.top + 24,
+                    bottom: 24,
+                    left: 16,
+                    right: 16,
+                  ),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Color(0xFF2A5EAF), Color(0xFF8B5CF6)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(Icons.link, color: Colors.white, size: 20),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Vault Notes',
+                            style: GoogleFonts.lexend(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Sign in to enable Google Drive backup',
+                        style: GoogleFonts.lexend(
+                          color: Colors.white70,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton.icon(
+                        onPressed: () async {
+                          await ref.read(googleDriveServiceProvider).signIn();
+                        },
+                        icon: const Icon(Icons.login, color: Color(0xFF2A5EAF), size: 16),
+                        label: Text(
+                          'Sign in with Google',
+                          style: GoogleFonts.lexend(
+                            color: const Color(0xFF2A5EAF),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: const Color(0xFF2A5EAF),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+            },
           ),
           Expanded(
             child: ListView(
@@ -1203,6 +1364,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
       'links_data.json',
       'tables_data.json',
       'bills_data.json',
+      'docs_data',
     ];
     
     final Map<String, Map<String, dynamic>> fileInfo = {
@@ -1211,6 +1373,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
       'links_data.json': {'name': 'Links', 'icon': Icons.link, 'color': Colors.blue},
       'tables_data.json': {'name': 'Tables & Formulas', 'icon': Icons.table_chart, 'color': Colors.teal},
       'bills_data.json': {'name': 'Bills & Loans', 'icon': Icons.receipt_long, 'color': Colors.orange},
+      'docs_data': {'name': 'Docs (Images & Data)', 'icon': Icons.folder, 'color': Colors.cyan},
     };
     
     Set<String> selectedFiles = Set.from(backupFiles);
@@ -1800,6 +1963,8 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     if (_currentIndex == 5) return const RemindersView();
     if (_currentIndex == 6) return const CardsView();
     if (_currentIndex == 7) return const BillsView();
+    if (_currentIndex == 8) return const DocsHomeScreen();
+    if (_currentIndex == 9) return const MileageView();
     return IndexedStack(index: _currentIndex, children: const [NotesView(), ExpensesView(), LinksView(), TablesView()]);
   }
 

@@ -90,6 +90,17 @@ class _BillsViewState extends ConsumerState<BillsView> {
           final sorted = List<Bill>.from(paidBills)..sort((a, b) => a.lastPaidDate!.compareTo(b.lastPaidDate!));
           start = DateTime(sorted.first.lastPaidDate!.year, sorted.first.lastPaidDate!.month, 1);
         }
+        
+        if (reports.isNotEmpty) {
+          for (var r in reports) {
+            final y = r['year'] as int;
+            final m = r['month'] as int;
+            final dt = DateTime(y, m, 1);
+            if (dt.isBefore(start)) {
+              start = dt;
+            }
+          }
+        }
         // End date is current month + 1 year
         final end = DateTime(DateTime.now().year, DateTime.now().month, 1).add(const Duration(days: 365));
         final monthsCount =
@@ -181,13 +192,18 @@ class _BillsViewState extends ConsumerState<BillsView> {
                         ],
                       ),
                     ),
-                    IconButton(
-                      icon: Icon(Icons.ios_share_rounded, color: isDark ? Colors.white70 : Colors.black87),
-                      tooltip: 'Export as CSV',
-                      onPressed: () async {
+                    PopupMenuButton<String>(
+                      icon: Icon(Icons.more_vert, color: isDark ? Colors.white70 : Colors.black87),
+                      tooltip: 'Export Options',
+                      onSelected: (val) async {
                         try {
                           final buffer = StringBuffer();
-                          buffer.writeln('Month,Credit Cards (Total),Loans (Total),Overall Total,Credit Details,Loan Details');
+                          if (val == 'csv') {
+                            buffer.writeln('Month,Credit Cards (Total),Loans (Total),Overall Total,Credit Details,Loan Details');
+                          } else {
+                            buffer.writeln('--- Vault Notes: Monthly Report ---');
+                          }
+                          
                           for (final m in months) {
                             final recorded = m['recorded'] as bool? ?? false;
                             if (!recorded) continue;
@@ -198,69 +214,418 @@ class _BillsViewState extends ConsumerState<BillsView> {
                             final creditDetails = (m['creditDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
                             final loanDetails = (m['loanDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
                             
-                            String formatDetails(List<Map<String, dynamic>> details) {
-                              if (details.isEmpty) return '';
-                              return details.map((d) => '${d['title']}: ${d['amount']}').join(' | ').replaceAll('"', '""');
+                            if (val == 'csv') {
+                              String formatDetails(List<Map<String, dynamic>> details) {
+                                if (details.isEmpty) return '';
+                                return details.map((d) => '${d['title']}: ${d['amount']}').join(' | ').replaceAll('"', '""');
+                              }
+                              final cDetailsStr = formatDetails(creditDetails);
+                              final lDetailsStr = formatDetails(loanDetails);
+                              buffer.writeln('"$label",$credit,$loan,$total,"$cDetailsStr","$lDetailsStr"');
+                            } else {
+                              buffer.writeln('\n[$label]');
+                              buffer.writeln('Credit Cards: ₹$credit');
+                              if (creditDetails.isNotEmpty) {
+                                buffer.writeln('  Details: ${creditDetails.map((d) => '${d['title']}: ₹${d['amount']}').join(' | ')}');
+                              }
+                              buffer.writeln('Loans: ₹$loan');
+                              if (loanDetails.isNotEmpty) {
+                                buffer.writeln('  Details: ${loanDetails.map((d) => '${d['title']}: ₹${d['amount']}').join(' | ')}');
+                              }
+                              buffer.writeln('Total: ₹$total');
+                              buffer.writeln('-' * 40);
                             }
-                            final cDetailsStr = formatDetails(creditDetails);
-                            final lDetailsStr = formatDetails(loanDetails);
-                            
-                            buffer.writeln('"$label",$credit,$loan,$total,"$cDetailsStr","$lDetailsStr"');
                           }
                           final dir = await getTemporaryDirectory();
-                          final file = File('${dir.path}/Vault_Monthly_Report.csv');
-                          await file.writeAsString(buffer.toString());
-                          await Share.shareXFiles([XFile(file.path)], text: 'Vault Notes - Monthly Report');
+                          if (val == 'csv') {
+                            final file = File('${dir.path}/Vault_Monthly_Report.csv');
+                            await file.writeAsString(buffer.toString());
+                            await Share.shareXFiles([XFile(file.path)], text: 'Vault Notes - Monthly Report (CSV)');
+                          } else {
+                            final file = File('${dir.path}/Vault_Monthly_Report.txt');
+                            await file.writeAsString(buffer.toString());
+                            await Share.shareXFiles([XFile(file.path)], text: 'Vault Notes - Monthly Report (TXT)');
+                          }
                         } catch (e) {
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error exporting: $e')));
+                          }
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(value: 'csv', child: Text('Export as CSV')),
+                        const PopupMenuItem(value: 'txt', child: Text('Export as TXT')),
+                      ],
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.add_circle_outline, color: isDark ? Colors.blue.shade400 : Colors.blue.shade700),
+                      tooltip: 'Add Previous Data',
+                      onPressed: () async {
+                        int selectedMonth = DateTime.now().month;
+                        final yearController = TextEditingController(text: DateTime.now().year.toString());
+                        final bankController = TextEditingController();
+                        final amountController = TextEditingController();
+                        String selectedType = 'Credit Card';
+
+                        final res = await showDialog<bool>(
+                          context: context,
+                          builder: (dctx) => StatefulBuilder(
+                            builder: (dctx, setDialogState) => AlertDialog(
+                              title: const Text('Add Data'),
+                              content: SingleChildScrollView(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    DropdownButtonFormField<String>(
+                                      value: selectedType,
+                                      decoration: const InputDecoration(labelText: 'Type'),
+                                      items: ['Credit Card', 'Loan'].map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+                                      onChanged: (v) => setDialogState(() => selectedType = v!),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: DropdownButtonFormField<int>(
+                                            value: selectedMonth,
+                                            decoration: const InputDecoration(labelText: 'Month'),
+                                            items: List.generate(12, (i) => DropdownMenuItem(value: i + 1, child: Text(DateFormat.MMM().format(DateTime(2000, i + 1))))),
+                                            onChanged: (v) => setDialogState(() => selectedMonth = v!),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: TextField(
+                                            controller: yearController,
+                                            keyboardType: TextInputType.number,
+                                            decoration: const InputDecoration(labelText: 'Year'),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    TextField(
+                                      controller: bankController,
+                                      decoration: const InputDecoration(labelText: 'Bank / Title'),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    TextField(
+                                      controller: amountController,
+                                      keyboardType: TextInputType.number,
+                                      decoration: const InputDecoration(labelText: 'Amount'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
+                                TextButton(
+                                  onPressed: () async {
+                                    if (bankController.text.isEmpty || amountController.text.isEmpty) return;
+                                    
+                                    int y = int.tryParse(yearController.text) ?? DateTime.now().year;
+                                    double amt = double.tryParse(amountController.text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
+                                    
+                                    final currentReports = await ref.read(vaultServiceProvider).loadMonthlyReports();
+                                    final existing = currentReports.firstWhere((r) => r['year'] == y && r['month'] == selectedMonth, orElse: () => <String, dynamic>{});
+                                    
+                                    List<Map<String, dynamic>> creditDetails = (existing['creditDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                                    List<Map<String, dynamic>> loanDetails = (existing['loanDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                                    
+                                    if (selectedType == 'Credit Card') {
+                                      final idx = creditDetails.indexWhere((x) => x['title'] == bankController.text);
+                                      if (idx != -1) {
+                                        creditDetails[idx] = Map<String, dynamic>.from(creditDetails[idx])..['amount'] = amt;
+                                      } else {
+                                        creditDetails.add({'title': bankController.text, 'amount': amt});
+                                      }
+                                    } else {
+                                      final idx = loanDetails.indexWhere((x) => x['title'] == bankController.text);
+                                      if (idx != -1) {
+                                        loanDetails[idx] = Map<String, dynamic>.from(loanDetails[idx])..['amount'] = amt;
+                                      } else {
+                                        loanDetails.add({'title': bankController.text, 'amount': amt});
+                                      }
+                                    }
+                                    
+                                    double cTotal = creditDetails.fold<double>(0.0, (s, x) => s + (x['amount'] as num).toDouble());
+                                    double lTotal = loanDetails.fold<double>(0.0, (s, x) => s + (x['amount'] as num).toDouble());
+                                    
+                                    await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
+                                      y, selectedMonth, cTotal, lTotal,
+                                      creditDetails: creditDetails,
+                                      loanDetails: loanDetails,
+                                    );
+                                    Navigator.pop(dctx, true);
+                                  },
+                                  child: const Text('Add'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+
+                        if (res == true) {
+                          final newReports = await ref.read(vaultServiceProvider).loadMonthlyReports();
+                          setModalState(() {
+                            reports = newReports;
+                          });
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Added successfully')));
                           }
                         }
                       },
                     ),
                     IconButton(
-                      icon: Icon(Icons.description_outlined, color: isDark ? Colors.green.shade400 : Colors.green.shade700),
-                      tooltip: 'Export as TXT',
+                      icon: Icon(Icons.edit_calendar, color: isDark ? Colors.orange.shade400 : Colors.orange.shade700),
+                      tooltip: 'Edit Previous Data',
                       onPressed: () async {
-                        try {
-                          final buffer = StringBuffer();
-                          buffer.writeln('--- Vault Notes: Monthly Report ---');
-                          for (final m in months) {
-                            final recorded = m['recorded'] as bool? ?? false;
-                            if (!recorded) continue;
-                            final label = m['label'];
-                            final credit = m['credit'];
-                            final loan = m['loan'];
-                            final total = (credit as num) + (loan as num);
-                            final creditDetails = (m['creditDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-                            final loanDetails = (m['loanDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                        int selectedMonth = DateTime.now().month;
+                        final yearController = TextEditingController(text: DateTime.now().year.toString());
+                        
+                        bool hasData = false;
+                        double rawCredit = 0.0;
+                        double rawLoan = 0.0;
+                        List<Map<String, dynamic>> creditDetails = [];
+                        List<Map<String, dynamic>> loanDetails = [];
+                        List<TextEditingController> creditControllers = [];
+                        List<TextEditingController> loanControllers = [];
+                        TextEditingController? rawCreditController;
+                        TextEditingController? rawLoanController;
+                        
+                        void loadData(int m, int y) {
+                          final existing = reports.firstWhere((r) => r['year'] == y && r['month'] == m, orElse: () => <String, dynamic>{});
+                          hasData = (existing as Map).isNotEmpty;
+                          if (hasData) {
+                            rawCredit = (existing['credit'] as num?)?.toDouble() ?? 0.0;
+                            rawLoan = (existing['loan'] as num?)?.toDouble() ?? 0.0;
+                            creditDetails = (existing['creditDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                            loanDetails = (existing['loanDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
                             
-                            buffer.writeln('\n[$label]');
-                            buffer.writeln('Credit Cards: ₹$credit');
-                            if (creditDetails.isNotEmpty) {
-                              buffer.writeln('  Details: ${creditDetails.map((d) => '${d['title']}: ₹${d['amount']}').join(' | ')}');
+                            creditControllers = creditDetails.map((d) => TextEditingController(text: (d['amount'] as num).toDouble().toStringAsFixed(0))).toList();
+                            loanControllers = loanDetails.map((d) => TextEditingController(text: (d['amount'] as num).toDouble().toStringAsFixed(0))).toList();
+                            
+                            if (creditDetails.isEmpty && loanDetails.isEmpty) {
+                              rawCreditController = TextEditingController(text: rawCredit > 0 ? rawCredit.toStringAsFixed(0) : '');
+                              rawLoanController = TextEditingController(text: rawLoan > 0 ? rawLoan.toStringAsFixed(0) : '');
+                            } else {
+                              rawCreditController = null;
+                              rawLoanController = null;
                             }
-                            buffer.writeln('Loans: ₹$loan');
-                            if (loanDetails.isNotEmpty) {
-                              buffer.writeln('  Details: ${loanDetails.map((d) => '${d['title']}: ₹${d['amount']}').join(' | ')}');
-                            }
-                            buffer.writeln('Total: ₹$total');
-                            buffer.writeln('-' * 40);
+                          } else {
+                            creditDetails = [];
+                            loanDetails = [];
+                            creditControllers = [];
+                            loanControllers = [];
+                            rawCreditController = null;
+                            rawLoanController = null;
                           }
-                          final dir = await getTemporaryDirectory();
-                          final file = File('${dir.path}/Vault_Monthly_Report.txt');
-                          await file.writeAsString(buffer.toString());
-                          await Share.shareXFiles([XFile(file.path)], text: 'Vault Notes - Monthly Report (TXT)');
-                        } catch (e) {
+                        }
+                        
+                        loadData(selectedMonth, DateTime.now().year);
+                        
+                        final res = await showDialog<bool>(
+                          context: context,
+                          builder: (dctx) => StatefulBuilder(
+                            builder: (dctx, setDialogState) {
+                              void onMonthYearChanged() {
+                                int y = int.tryParse(yearController.text) ?? DateTime.now().year;
+                                loadData(selectedMonth, y);
+                                setDialogState(() {});
+                              }
+                              
+                              return AlertDialog(
+                                title: const Text('Edit Data'),
+                                content: SingleChildScrollView(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: DropdownButtonFormField<int>(
+                                              value: selectedMonth,
+                                              decoration: const InputDecoration(labelText: 'Month'),
+                                              items: List.generate(12, (i) => DropdownMenuItem(value: i + 1, child: Text(DateFormat.MMM().format(DateTime(2000, i + 1))))),
+                                              onChanged: (v) {
+                                                selectedMonth = v!;
+                                                onMonthYearChanged();
+                                              },
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: TextField(
+                                              controller: yearController,
+                                              keyboardType: TextInputType.number,
+                                              decoration: const InputDecoration(labelText: 'Year'),
+                                              onChanged: (_) => onMonthYearChanged(),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 16),
+                                      if (hasData && creditDetails.isEmpty && loanDetails.isEmpty) ...[
+                                        TextField(
+                                          controller: rawCreditController,
+                                          keyboardType: TextInputType.number,
+                                          decoration: const InputDecoration(labelText: 'Credit amount'),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        TextField(
+                                          controller: rawLoanController,
+                                          keyboardType: TextInputType.number,
+                                          decoration: const InputDecoration(labelText: 'Loan amount'),
+                                        ),
+                                      ],
+                                      if (creditDetails.isNotEmpty) ...[
+                                        Text('Credit Cards', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange.shade700)),
+                                        for (int i = 0; i < creditDetails.length; i++)
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: TextField(
+                                                  controller: creditControllers[i],
+                                                  keyboardType: TextInputType.number,
+                                                  decoration: InputDecoration(labelText: creditDetails[i]['title']),
+                                                ),
+                                              ),
+                                              IconButton(
+                                                icon: const Icon(Icons.delete_outline, color: Colors.red),
+                                                onPressed: () async {
+                                                  final confirm = await showDialog<bool>(
+                                                    context: context,
+                                                    builder: (c) => AlertDialog(
+                                                      title: const Text('Delete Entry'),
+                                                      content: const Text('Are you sure you want to remove this entry?'),
+                                                      actions: [
+                                                        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('No')),
+                                                        TextButton(
+                                                          onPressed: () => Navigator.pop(c, true), 
+                                                          child: const Text('Yes', style: TextStyle(color: Colors.red)),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  );
+                                                  if (confirm == true) {
+                                                    creditDetails.removeAt(i);
+                                                    creditControllers.removeAt(i);
+                                                    setDialogState(() {});
+                                                  }
+                                                },
+                                              ),
+                                            ],
+                                          ),
+                                        const SizedBox(height: 12),
+                                      ],
+                                      if (loanDetails.isNotEmpty) ...[
+                                        const Text('Loans', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1D63D2))),
+                                        for (int i = 0; i < loanDetails.length; i++)
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: TextField(
+                                                  controller: loanControllers[i],
+                                                  keyboardType: TextInputType.number,
+                                                  decoration: InputDecoration(labelText: loanDetails[i]['title']),
+                                                ),
+                                              ),
+                                              IconButton(
+                                                icon: const Icon(Icons.delete_outline, color: Colors.red),
+                                                onPressed: () async {
+                                                  final confirm = await showDialog<bool>(
+                                                    context: context,
+                                                    builder: (c) => AlertDialog(
+                                                      title: const Text('Delete Entry'),
+                                                      content: const Text('Are you sure you want to remove this entry?'),
+                                                      actions: [
+                                                        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('No')),
+                                                        TextButton(
+                                                          onPressed: () => Navigator.pop(c, true), 
+                                                          child: const Text('Yes', style: TextStyle(color: Colors.red)),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  );
+                                                  if (confirm == true) {
+                                                    loanDetails.removeAt(i);
+                                                    loanControllers.removeAt(i);
+                                                    setDialogState(() {});
+                                                  }
+                                                },
+                                              ),
+                                            ],
+                                          ),
+                                      ],
+                                      if (!hasData)
+                                        const Padding(
+                                          padding: EdgeInsets.symmetric(vertical: 16),
+                                          child: Text('No data recorded for this month.', style: TextStyle(color: Colors.grey)),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                                actions: [
+                                  TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
+                                  TextButton(
+                                    onPressed: () async {
+                                      if (!hasData) {
+                                        Navigator.pop(dctx, false);
+                                        return;
+                                      }
+                                      int y = int.tryParse(yearController.text) ?? DateTime.now().year;
+                                      
+                                      if (creditDetails.isEmpty && loanDetails.isEmpty) {
+                                        double cTotal = double.tryParse(rawCreditController!.text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
+                                        double lTotal = double.tryParse(rawLoanController!.text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
+                                        await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
+                                          y, selectedMonth, cTotal, lTotal,
+                                        );
+                                      } else {
+                                        for (int i = 0; i < creditDetails.length; i++) {
+                                          double amt = double.tryParse(creditControllers[i].text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
+                                          creditDetails[i]['amount'] = amt;
+                                        }
+                                        for (int i = 0; i < loanDetails.length; i++) {
+                                          double amt = double.tryParse(loanControllers[i].text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
+                                          loanDetails[i]['amount'] = amt;
+                                        }
+                                        
+                                        double cTotal = creditDetails.fold<double>(0.0, (s, x) => s + (x['amount'] as num).toDouble());
+                                        double lTotal = loanDetails.fold<double>(0.0, (s, x) => s + (x['amount'] as num).toDouble());
+                                        
+                                        await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
+                                          y, selectedMonth, cTotal, lTotal,
+                                          creditDetails: creditDetails,
+                                          loanDetails: loanDetails,
+                                        );
+                                      }
+                                      Navigator.pop(dctx, true);
+                                    },
+                                    child: const Text('Update'),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        );
+
+                        if (res == true) {
+                          final newReports = await ref.read(vaultServiceProvider).loadMonthlyReports();
+                          setModalState(() {
+                            reports = newReports;
+                          });
                           if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error exporting: $e')));
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Updated successfully')));
                           }
                         }
                       },
                     ),
-                    TextButton(
+                    IconButton(
+                      icon: const Icon(Icons.close),
                       onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Close'),
+                      tooltip: 'Close',
                     ),
                   ],
                 ),
@@ -352,82 +717,6 @@ class _BillsViewState extends ConsumerState<BillsView> {
                               expandedIndices.add(idx);
                             }
                           });
-                        }
-                      },
-                      onLongPress: () async {
-                        final creditController = TextEditingController(
-                            text: creditVal > 0
-                                ? creditVal.toStringAsFixed(0)
-                                : '');
-                        final loanController = TextEditingController(
-                            text: loanVal > 0
-                                ? loanVal.toStringAsFixed(0)
-                                : '');
-                        final res = await showDialog<bool>(
-                          context: context,
-                          builder: (dctx) => AlertDialog(
-                            title: Text('Edit $label'),
-                            content: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                TextField(
-                                  controller: creditController,
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                      labelText: 'Credit amount'),
-                                ),
-                                const SizedBox(height: 8),
-                                TextField(
-                                  controller: loanController,
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                      labelText: 'Loan amount'),
-                                ),
-                              ],
-                            ),
-                            actions: [
-                              TextButton(
-                                  onPressed: () =>
-                                      Navigator.pop(dctx, false),
-                                  child: const Text('Cancel')),
-                              TextButton(
-                                onPressed: () async {
-                                  final creditStr = creditController.text
-                                      .replaceAll(RegExp(r'[^0-9.]'), '');
-                                  final loanStr = loanController.text
-                                      .replaceAll(RegExp(r'[^0-9.]'), '');
-                                  final credit =
-                                      double.tryParse(creditStr) ?? 0.0;
-                                  final loan =
-                                      double.tryParse(loanStr) ?? 0.0;
-                                  final dtParts = label.split(' ');
-                                  final mon = DateFormat.MMM()
-                                      .parse(dtParts[0])
-                                      .month;
-                                  final yr = int.tryParse(dtParts[1]) ??
-                                      DateTime.now().year;
-                                  await ref
-                                      .read(vaultServiceProvider)
-                                      .addOrUpdateMonthlySnapshot(
-                                      yr, mon, credit, loan);
-                                  Navigator.pop(dctx, true);
-                                },
-                                child: const Text('Save'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (res == true) {
-                          final newReports = await ref
-                              .read(vaultServiceProvider)
-                              .loadMonthlyReports();
-                          setModalState(() {
-                            reports = newReports;
-                          });
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Saved')));
-                          }
                         }
                       },
                       child: Container(
@@ -550,60 +839,9 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                     crossAxisAlignment: CrossAxisAlignment.center,
                                     children: creditDetails.map((d) => Padding(
                                       padding: const EdgeInsets.only(bottom: 4),
-                                      child: GestureDetector(
-                                        onTap: () async {
-                                          final amtController = TextEditingController(text: (d['amount'] as num).toDouble().toStringAsFixed(0));
-                                          final res = await showDialog<bool>(
-                                            context: context,
-                                            builder: (dctx) => AlertDialog(
-                                              title: Text('Edit ${d['title']}'),
-                                              content: TextField(
-                                                controller: amtController,
-                                                keyboardType: TextInputType.number,
-                                                decoration: const InputDecoration(labelText: 'Amount'),
-                                              ),
-                                              actions: [
-                                                TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
-                                                TextButton(onPressed: () async {
-                                                  final valStr = amtController.text.replaceAll(RegExp(r'[^0-9.]'), '');
-                                                  final val = double.tryParse(valStr) ?? 0.0;
-                                                  
-                                                  final newDetails = List<Map<String, dynamic>>.from(creditDetails);
-                                                  final idx = newDetails.indexWhere((x) => x['title'] == d['title']);
-                                                  if (idx != -1) {
-                                                    newDetails[idx] = Map<String, dynamic>.from(newDetails[idx])..['amount'] = val;
-                                                  }
-                                                  
-                                                  final newCredit = newDetails.fold<double>(0.0, (s, x) => s + (x['amount'] as num).toDouble());
-                                                  
-                                                  final dtParts = label.split(' ');
-                                                  final mon = DateFormat.MMM().parse(dtParts[0]).month;
-                                                  final yr = int.tryParse(dtParts[1]) ?? DateTime.now().year;
-                                                  
-                                                  await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
-                                                    yr, mon, newCredit, loanVal,
-                                                    creditDetails: newDetails,
-                                                    loanDetails: loanDetails,
-                                                  );
-                                                  Navigator.pop(dctx, true);
-                                                }, child: const Text('Save')),
-                                              ],
-                                            ),
-                                          );
-                                          if (res == true) {
-                                            final newReports = await ref.read(vaultServiceProvider).loadMonthlyReports();
-                                            setModalState(() {
-                                              reports = newReports;
-                                            });
-                                            if (context.mounted) {
-                                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved')));
-                                            }
-                                          }
-                                        },
-                                        child: Text('${d['title']}\n${fmt((d['amount'] as num).toDouble())}',
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.orange.shade700)),
-                                      ),
+                                      child: Text('${d['title']}\n${fmt((d['amount'] as num).toDouble())}',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.orange.shade700)),
                                     )).toList(),
                                   ),
                                 ),
@@ -613,60 +851,9 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                     crossAxisAlignment: CrossAxisAlignment.center,
                                     children: loanDetails.map((d) => Padding(
                                       padding: const EdgeInsets.only(bottom: 4),
-                                      child: GestureDetector(
-                                        onTap: () async {
-                                          final amtController = TextEditingController(text: (d['amount'] as num).toDouble().toStringAsFixed(0));
-                                          final res = await showDialog<bool>(
-                                            context: context,
-                                            builder: (dctx) => AlertDialog(
-                                              title: Text('Edit ${d['title']}'),
-                                              content: TextField(
-                                                controller: amtController,
-                                                keyboardType: TextInputType.number,
-                                                decoration: const InputDecoration(labelText: 'Amount'),
-                                              ),
-                                              actions: [
-                                                TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
-                                                TextButton(onPressed: () async {
-                                                  final valStr = amtController.text.replaceAll(RegExp(r'[^0-9.]'), '');
-                                                  final val = double.tryParse(valStr) ?? 0.0;
-                                                  
-                                                  final newDetails = List<Map<String, dynamic>>.from(loanDetails);
-                                                  final idx = newDetails.indexWhere((x) => x['title'] == d['title']);
-                                                  if (idx != -1) {
-                                                    newDetails[idx] = Map<String, dynamic>.from(newDetails[idx])..['amount'] = val;
-                                                  }
-                                                  
-                                                  final newLoan = newDetails.fold<double>(0.0, (s, x) => s + (x['amount'] as num).toDouble());
-                                                  
-                                                  final dtParts = label.split(' ');
-                                                  final mon = DateFormat.MMM().parse(dtParts[0]).month;
-                                                  final yr = int.tryParse(dtParts[1]) ?? DateTime.now().year;
-                                                  
-                                                  await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
-                                                    yr, mon, creditVal, newLoan,
-                                                    creditDetails: creditDetails,
-                                                    loanDetails: newDetails,
-                                                  );
-                                                  Navigator.pop(dctx, true);
-                                                }, child: const Text('Save')),
-                                              ],
-                                            ),
-                                          );
-                                          if (res == true) {
-                                            final newReports = await ref.read(vaultServiceProvider).loadMonthlyReports();
-                                            setModalState(() {
-                                              reports = newReports;
-                                            });
-                                            if (context.mounted) {
-                                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved')));
-                                            }
-                                          }
-                                        },
-                                        child: Text('${d['title']}\n${fmt((d['amount'] as num).toDouble())}',
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: const Color(0xFF1D63D2))),
-                                      ),
+                                      child: Text('${d['title']}\n${fmt((d['amount'] as num).toDouble())}',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: const Color(0xFF1D63D2))),
                                     )).toList(),
                                   ),
                                 ),

@@ -1781,9 +1781,23 @@ class BillsNotifier extends Notifier<List<Bill>> {
 
   Future<void> markAsPaid(String id) async {
     await _initFuture;
+    final now = DateTime.now();
+    final currentMonth = '${now.year}-${now.month.toString().padLeft(2, '0')}';
     state = [
       for (final b in state)
-        if (b.id == id) b.copyWith(isPaid: true, lastPaidDate: DateTime.now()) else b
+        if (b.id == id)
+          b.copyWith(
+            isPaid: true,
+            lastPaidDate: now,
+            // Increment paidEmis for any bill if not already counted this month
+            paidEmis: (b.lastEmiPaidMonth != currentMonth)
+                ? (b.paidEmis ?? 0) + 1
+                : b.paidEmis,
+            lastEmiPaidMonth: (b.lastEmiPaidMonth != currentMonth)
+                ? currentMonth
+                : b.lastEmiPaidMonth,
+          )
+        else b
     ];
     _save();
   }

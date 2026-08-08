@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models.dart';
 import '../providers.dart';
 import '../notification_service.dart';
-
+import 'package:intl/intl.dart';
 class BillDialog extends ConsumerStatefulWidget {
   final Bill? bill;
   const BillDialog({super.key, this.bill});
@@ -17,6 +17,9 @@ class _BillDialogState extends ConsumerState<BillDialog> {
   final _titleController = TextEditingController();
   final _amountController = TextEditingController();
   final _noteController = TextEditingController();
+  final _totalLoanAmountController = TextEditingController();
+  final _totalEmisController = TextEditingController();
+  final _paidEmisController = TextEditingController();
   final _titleFocusNode = FocusNode();
   int _dueDay = 1;
   String _type = 'Credit Card';
@@ -29,8 +32,11 @@ class _BillDialogState extends ConsumerState<BillDialog> {
     super.initState();
     if (widget.bill != null) {
       _titleController.text = widget.bill!.title;
-      _amountController.text = widget.bill!.amount > 0 ? widget.bill!.amount.toStringAsFixed(2) : '';
+      _amountController.text = widget.bill!.amount > 0 ? NumberFormat.decimalPattern('en_IN').format(widget.bill!.amount) : '';
       _noteController.text = widget.bill!.note ?? '';
+      _totalLoanAmountController.text = widget.bill!.totalLoanAmount != null ? NumberFormat.decimalPattern('en_IN').format(widget.bill!.totalLoanAmount!) : '';
+      _totalEmisController.text = widget.bill!.totalEmis != null ? widget.bill!.totalEmis.toString() : '';
+      _paidEmisController.text = widget.bill!.paidEmis != null ? widget.bill!.paidEmis.toString() : '';
       _dueDay = widget.bill!.dueDate;
       _type = widget.bill!.type ?? 'Credit Card';
       _reminderDaysList = List<int>.from(widget.bill!.reminderDaysBeforeList);
@@ -49,6 +55,9 @@ class _BillDialogState extends ConsumerState<BillDialog> {
     _titleController.dispose();
     _amountController.dispose();
     _noteController.dispose();
+    _totalLoanAmountController.dispose();
+    _totalEmisController.dispose();
+    _paidEmisController.dispose();
     _titleFocusNode.dispose();
     super.dispose();
   }
@@ -110,7 +119,8 @@ class _BillDialogState extends ConsumerState<BillDialog> {
                 ),
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                  IndianThousandsFormatter(),
                 ],
                 style: const TextStyle(fontSize: 13),
               ),
@@ -143,6 +153,64 @@ class _BillDialogState extends ConsumerState<BillDialog> {
                 ],
               ),
               const SizedBox(height: 7),
+              if (_type == 'Loan') ...[
+                TextField(
+                  controller: _totalLoanAmountController,
+                  textInputAction: TextInputAction.next,
+                  decoration: InputDecoration(
+                    labelText: 'Total Loan Amount (Optional)',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    prefixIcon: const Icon(Icons.account_balance, size: 16),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                    IndianThousandsFormatter(),
+                  ],
+                  style: const TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 7),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _totalEmisController,
+                        textInputAction: TextInputAction.next,
+                        decoration: InputDecoration(
+                          labelText: 'Total EMIs',
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                          prefixIcon: const Icon(Icons.date_range, size: 16),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        ),
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: TextField(
+                        controller: _paidEmisController,
+                        textInputAction: TextInputAction.next,
+                        decoration: InputDecoration(
+                          labelText: 'Paid EMIs',
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                          prefixIcon: const Icon(Icons.check_circle_outline, size: 16),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        ),
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 7),
+              ],
               TextField(
                 controller: _noteController,
                 textInputAction: TextInputAction.next,
@@ -301,7 +369,7 @@ class _BillDialogState extends ConsumerState<BillDialog> {
       return;
     }
 
-    final amountStr = _amountController.text.trim();
+    final amountStr = _amountController.text.trim().replaceAll(',', '');
     double amount = 0.0;
     if (amountStr.isNotEmpty) {
       amount = double.tryParse(amountStr) ?? 0.0;
@@ -326,6 +394,9 @@ class _BillDialogState extends ConsumerState<BillDialog> {
       reminderEnabled: _reminderEnabled,
       type: _type,
       note: _noteController.text.trim().isNotEmpty ? _noteController.text.trim() : null,
+      totalLoanAmount: _type == 'Loan' && _totalLoanAmountController.text.trim().isNotEmpty ? double.tryParse(_totalLoanAmountController.text.trim().replaceAll(',', '')) : null,
+      totalEmis: _type == 'Loan' && _totalEmisController.text.trim().isNotEmpty ? int.tryParse(_totalEmisController.text.trim()) : null,
+      paidEmis: _type == 'Loan' && _paidEmisController.text.trim().isNotEmpty ? int.tryParse(_paidEmisController.text.trim()) : null,
     );
 
     if (widget.bill == null) {
@@ -371,5 +442,37 @@ class _BillDialogState extends ConsumerState<BillDialog> {
       case 3: return 'rd';
       default: return 'th';
     }
+  }
+}
+
+class IndianThousandsFormatter extends TextInputFormatter {
+  final NumberFormat _format = NumberFormat.decimalPattern('en_IN');
+
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    if (newValue.text.isEmpty) return newValue;
+
+    String newText = newValue.text.replaceAll(RegExp(r'[^0-9.]'), '');
+    List<String> parts = newText.split('.');
+    String intPart = parts[0];
+
+    try {
+      if (intPart.isNotEmpty) {
+        int parsed = int.parse(intPart);
+        intPart = _format.format(parsed);
+      }
+    } catch (e) {
+      // ignore parsing errors
+    }
+
+    String formattedText = intPart;
+    if (parts.length > 1) {
+      formattedText += '.' + parts[1];
+    }
+
+    return newValue.copyWith(
+      text: formattedText,
+      selection: TextSelection.collapsed(offset: formattedText.length),
+    );
   }
 }

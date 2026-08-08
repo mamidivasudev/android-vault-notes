@@ -540,6 +540,10 @@ class Bill {
   final bool reminderEnabled;
   final String? type;
   final String? note;
+  final double? totalLoanAmount;
+  final int? totalEmis;
+  final int? paidEmis;
+  final String? lastEmiPaidMonth; // e.g. '2026-08', to avoid double-counting
 
   Bill({
     String? id,
@@ -555,6 +559,10 @@ class Bill {
     this.reminderEnabled = true,
     this.type = 'Credit Card',
     this.note,
+    this.totalLoanAmount,
+    this.totalEmis,
+    this.paidEmis,
+    this.lastEmiPaidMonth,
   }) : id = id ?? const Uuid().v4(),
        reminderDaysBeforeList = reminderDaysBeforeList ?? [reminderDaysBefore];
 
@@ -572,6 +580,10 @@ class Bill {
         'reminderEnabled': reminderEnabled,
         'type': type,
         'note': note,
+        'totalLoanAmount': totalLoanAmount,
+        'totalEmis': totalEmis,
+        'paidEmis': paidEmis,
+        'lastEmiPaidMonth': lastEmiPaidMonth,
       };
 
   factory Bill.fromJson(Map<String, dynamic> json) {
@@ -594,6 +606,10 @@ class Bill {
         reminderEnabled: json['reminderEnabled'] ?? true,
         type: json['type']?.toString() ?? 'Credit Card',
         note: json['note']?.toString(),
+        totalLoanAmount: json['totalLoanAmount'] != null ? (json['totalLoanAmount'] as num).toDouble() : null,
+        totalEmis: json['totalEmis'] as int?,
+        paidEmis: json['paidEmis'] as int?,
+        lastEmiPaidMonth: json['lastEmiPaidMonth']?.toString(),
       );
   }
 
@@ -610,6 +626,10 @@ class Bill {
     bool? reminderEnabled,
     String? type,
     String? note,
+    double? totalLoanAmount,
+    int? totalEmis,
+    int? paidEmis,
+    Object? lastEmiPaidMonth = _sentinel,
   }) =>
       Bill(
         id: id,
@@ -625,8 +645,14 @@ class Bill {
         reminderEnabled: reminderEnabled ?? this.reminderEnabled,
         type: type ?? this.type,
         note: note ?? this.note,
+        totalLoanAmount: totalLoanAmount ?? this.totalLoanAmount,
+        totalEmis: totalEmis ?? this.totalEmis,
+        paidEmis: paidEmis ?? this.paidEmis,
+        lastEmiPaidMonth: lastEmiPaidMonth == _sentinel ? this.lastEmiPaidMonth : lastEmiPaidMonth as String?,
       );
 }
+
+const _sentinel = Object();
 
 class FuelEntry {
   final String date; // stored as yyyy-MM-dd

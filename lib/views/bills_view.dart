@@ -25,6 +25,586 @@ class _BillsViewState extends ConsumerState<BillsView> {
   bool _loanBillsExpanded = false;
   bool _otherBillsExpanded = false;
 
+  void _showEmiReport(BuildContext context, bool isDark) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final allBills = ref.read(billsProvider);
+          final loans = allBills
+              .where((b) => b.type == 'Loan' && b.totalEmis != null && b.totalLoanAmount != null)
+              .toList();
+          final creditCards = allBills
+              .where((b) => (b.type ?? 'Credit Card') == 'Credit Card')
+              .toList();
+
+          String fmt(double v) => '₹${NumberFormat.decimalPattern('en_IN').format(v)}';
+
+          Future<void> editLoan(Bill loan) async {
+            final leftController = TextEditingController(
+              text: loan.amount > 0 ? NumberFormat.decimalPattern('en_IN').format(loan.amount) : '',
+            );
+            final totalController = TextEditingController(
+              text: loan.totalLoanAmount != null
+                  ? NumberFormat.decimalPattern('en_IN').format(loan.totalLoanAmount)
+                  : '',
+            );
+            final totalEmisController = TextEditingController(
+              text: loan.totalEmis?.toString() ?? '',
+            );
+            final paidEmisController = TextEditingController(
+              text: (loan.paidEmis ?? 0).toString(),
+            );
+
+            final saved = await showDialog<bool>(
+              context: context,
+              builder: (dctx) => AlertDialog(
+                title: Text('Edit: ${loan.title}'),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: totalController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'Total Loan Amount (₹)'),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: leftController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'Left Amount (₹)'),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: totalEmisController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'Total EMIs'),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: paidEmisController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'EMIs Paid'),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
+                  TextButton(
+                    onPressed: () => Navigator.pop(dctx, true),
+                    child: const Text('Update'),
+                  ),
+                ],
+              ),
+            );
+
+            if (saved == true) {
+              final newLeft = double.tryParse(leftController.text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? loan.amount;
+              final newTotal = double.tryParse(totalController.text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? loan.totalLoanAmount;
+              final newTotalEmis = int.tryParse(totalEmisController.text.trim()) ?? loan.totalEmis;
+              final newPaidEmis = int.tryParse(paidEmisController.text.trim()) ?? (loan.paidEmis ?? 0);
+
+              ref.read(billsProvider.notifier).updateBill(
+                loan.copyWith(
+                  amount: newLeft,
+                  totalLoanAmount: newTotal,
+                  totalEmis: newTotalEmis,
+                  paidEmis: newPaidEmis,
+                ),
+              );
+
+              setSheetState(() {});
+
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('${loan.title} updated'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              }
+            }
+          }
+
+          Future<void> deleteLoan(Bill loan) async {
+            final confirm = await showDialog<bool>(
+              context: context,
+              builder: (dctx) => AlertDialog(
+                title: const Text('Delete Loan'),
+                content: Text('Are you sure you want to delete ${loan.title}?'),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('No')),
+                  TextButton(onPressed: () => Navigator.pop(dctx, true), child: const Text('Yes', style: TextStyle(color: Colors.red))),
+                ],
+              ),
+            );
+            if (confirm == true) {
+              ref.read(billsProvider.notifier).deleteBill(loan.id);
+              setSheetState(() {});
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('${loan.title} deleted')),
+                );
+              }
+            }
+          }
+
+          int getCreditCardDefaultPaid(String title) {
+            final t = title.toLowerCase();
+            if (t.contains('hdfc')) return 5;
+            if (t.contains('idfc')) return 4;
+            if (t.contains('sbi')) return 5;
+            if (t.contains('equits') || t.contains('equitas')) return 1;
+            if (t.contains('yes')) return 1;
+            return 0;
+          }
+
+          Future<void> showPaidMonths(Bill loan) async {
+            bool isCreditCard = loan.type != 'Loan';
+            int paidCount = loan.paidEmis ?? (isCreditCard ? getCreditCardDefaultPaid(loan.title) : 0);
+
+            await showDialog(
+              context: context,
+              builder: (dctx) => StatefulBuilder(
+                builder: (dctx, setDialogState) {
+                  final now = DateTime.now();
+                  List<String> months = [];
+                  for (int i = paidCount - 1; i >= 0; i--) {
+                    final d = DateTime(now.year, now.month - i);
+                    months.add(DateFormat.MMM().format(d));
+                  }
+
+                  return AlertDialog(
+                    title: Text('${loan.title} Paid Months'),
+                    content: SizedBox(
+                      width: double.maxFinite,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (isCreditCard) ...[
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text('Total EMIs:', style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.orange.shade300 : Colors.orange.shade700)),
+                                Row(
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.remove_circle_outline),
+                                      color: Colors.red.shade400,
+                                      onPressed: paidCount > 0 ? () {
+                                        setDialogState(() => paidCount--);
+                                        ref.read(billsProvider.notifier).updateBill(loan.copyWith(paidEmis: paidCount));
+                                        setSheetState(() {});
+                                      } : null,
+                                    ),
+                                    Text('$paidCount', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                                    IconButton(
+                                      icon: const Icon(Icons.add_circle_outline),
+                                      color: Colors.green.shade600,
+                                      onPressed: () {
+                                        setDialogState(() => paidCount++);
+                                        ref.read(billsProvider.notifier).updateBill(loan.copyWith(paidEmis: paidCount));
+                                        setSheetState(() {});
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            const Divider(),
+                          ],
+                          if (paidCount == 0)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 8),
+                              child: Text('No EMIs paid yet.', style: TextStyle(color: Colors.grey)),
+                            )
+                          else
+                            Flexible(
+                              child: SingleChildScrollView(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: months.map((m) => Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 4),
+                                    child: Text('• $m', style: const TextStyle(fontSize: 16)),
+                                  )).toList(),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    actions: [TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('Close'))],
+                  );
+                },
+              ),
+            );
+          }
+
+          return Container(
+            height: MediaQuery.of(context).size.height * 0.82,
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF0F172A) : Colors.white,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            child: Column(
+              children: [
+                // Handle bar
+                Container(
+                  height: 4,
+                  width: 40,
+                  margin: const EdgeInsets.only(top: 12, bottom: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                // Header
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(Icons.receipt_long,
+                            color: isDark ? Colors.orange.shade400 : Colors.orange.shade700,
+                            size: 20),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'EMI Report',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: isDark ? Colors.white : Colors.black87,
+                              ),
+                            ),
+                            Text(
+                              '${loans.length} loan${loans.length == 1 ? '' : 's'} · ${creditCards.length} credit card${creditCards.length == 1 ? '' : 's'}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isDark ? Colors.white54 : Colors.black45,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                        icon: Icon(Icons.close, color: isDark ? Colors.white54 : Colors.black45),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                ),
+                Divider(height: 1, thickness: 0.5, color: isDark ? Colors.white12 : Colors.black12),
+                // Content
+                Expanded(
+                  child: SafeArea(
+                    top: false,
+                    child: ListView(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                      children: [
+                      // Loans Section
+                      if (loans.isNotEmpty) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Text(
+                            'Loans',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              letterSpacing: 0.5,
+                              color: isDark ? Colors.white38 : Colors.black38,
+                            ),
+                          ),
+                        ),
+                        ...loans.map((loan) {
+                          final paid = loan.paidEmis ?? 0;
+                          final emisLeft = loan.totalEmis! - paid;
+                          final amountLeft = loan.amount;
+                          final progress = loan.totalEmis! > 0 ? paid / loan.totalEmis! : 0.0;
+
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade50,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: isDark ? Colors.white12 : Colors.black12,
+                                width: 1,
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      loan.title,
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                        color: isDark ? Colors.white : Colors.black87,
+                                      ),
+                                    ),
+                                    Row(
+                                      children: [
+                                        PopupMenuButton<String>(
+                                          padding: EdgeInsets.zero,
+                                          icon: Icon(Icons.more_vert, size: 18, color: isDark ? Colors.grey.shade400 : Colors.grey.shade600),
+                                          tooltip: 'Options',
+                                          onSelected: (val) {
+                                            if (val == 'edit') editLoan(loan);
+                                            else if (val == 'delete') deleteLoan(loan);
+                                          },
+                                          itemBuilder: (context) => [
+                                            const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                            const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                                          ],
+                                        ),
+                                        Container(
+                                          margin: const EdgeInsets.only(right: 4),
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: Colors.green,
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Text(
+                                                DateFormat.MMM().format(DateTime.now()),
+                                                style: const TextStyle(
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              const Icon(
+                                                Icons.check_circle,
+                                                color: Colors.white,
+                                                size: 12,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        IconButton(
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+                                          icon: Icon(Icons.info_outline, size: 18,
+                                              color: isDark ? Colors.grey.shade400 : Colors.grey.shade600),
+                                          tooltip: 'Paid Months',
+                                          onPressed: () => showPaidMonths(loan),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Total: ${fmt(loan.totalLoanAmount ?? 0)}',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: isDark ? Colors.white70 : Colors.black54,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Left: ${fmt(amountLeft)}',
+                                      style: const TextStyle(
+                                        color: Colors.red,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                // Progress bar
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: LinearProgressIndicator(
+                                    value: progress.clamp(0.0, 1.0),
+                                    minHeight: 5,
+                                    backgroundColor: isDark ? Colors.white12 : Colors.black12,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      isDark ? Colors.green.shade400 : Colors.green.shade600,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    Text(
+                                      'Total EMIs: ${loan.totalEmis}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: isDark ? Colors.white54 : Colors.black45,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    Text(
+                                      'Paid: $paid',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: isDark ? Colors.green.shade400 : Colors.green.shade700,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    Text(
+                                      'Left: $emisLeft',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: isDark ? Colors.orange.shade300 : Colors.orange.shade700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                        const SizedBox(height: 8),
+                      ],
+                      // Credit Cards Section
+                      if (creditCards.isNotEmpty) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Text(
+                            'Credit Cards',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              letterSpacing: 0.5,
+                              color: isDark ? Colors.white38 : Colors.black38,
+                            ),
+                          ),
+                        ),
+                        ...creditCards.map((card) {
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade50,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: isDark ? Colors.white12 : Colors.black12,
+                                width: 1,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      card.title,
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                        color: isDark ? Colors.white : Colors.black87,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      fmt(card.amount),
+                                      style: TextStyle(
+                                        color: isDark ? Colors.orange.shade300 : Colors.orange.shade700,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                Row(
+                                  children: [
+                                    if (card.isPaid || !card.isPaid)
+                                      Container(
+                                        margin: const EdgeInsets.only(right: 4),
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.green,
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Text(
+                                              DateFormat.MMM().format(DateTime.now()),
+                                              style: const TextStyle(
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 4),
+                                            const Icon(
+                                              Icons.check_circle,
+                                              color: Colors.white,
+                                              size: 12,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    IconButton(
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                      icon: Icon(Icons.info_outline, size: 20,
+                                          color: isDark ? Colors.grey.shade400 : Colors.grey.shade600),
+                                      tooltip: 'Paid Months',
+                                      onPressed: () => showPaidMonths(card),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                      if (loans.isEmpty && creditCards.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.all(32),
+                          child: Center(
+                            child: Text(
+                              'No active bills found.',
+                              style: TextStyle(color: isDark ? Colors.white38 : Colors.black38),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+
   Future<void> _showMonthlyReport(List<Bill> allBills) async {
     final currentCreditBills = allBills.where((b) => (b.type ?? 'Credit Card') == 'Credit Card').toList();
     final currentLoanBills = allBills.where((b) => b.type == 'Loan').toList();
@@ -155,7 +735,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
               // Header
               Padding(
                 padding:
-                const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                 child: Row(
                   children: [
                     Container(
@@ -174,90 +754,32 @@ class _BillsViewState extends ConsumerState<BillsView> {
                         children: [
                           Text(
                             'Monthly Report',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              fontSize: 17,
+                              fontSize: 16,
                               fontWeight: FontWeight.bold,
                               color: isDark ? Colors.white : Colors.black87,
                             ),
                           ),
                           Text(
                             'May 2026 – May 2028',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: 12,
-                              color: isDark
-                                  ? Colors.white54
-                                  : Colors.black45,
+                              color: isDark ? Colors.white54 : Colors.black45,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    PopupMenuButton<String>(
-                      icon: Icon(Icons.more_vert, color: isDark ? Colors.white70 : Colors.black87),
-                      tooltip: 'Export Options',
-                      onSelected: (val) async {
-                        try {
-                          final buffer = StringBuffer();
-                          if (val == 'csv') {
-                            buffer.writeln('Month,Credit Cards (Total),Loans (Total),Overall Total,Credit Details,Loan Details');
-                          } else {
-                            buffer.writeln('--- Vault Notes: Monthly Report ---');
-                          }
-                          
-                          for (final m in months) {
-                            final recorded = m['recorded'] as bool? ?? false;
-                            if (!recorded) continue;
-                            final label = m['label'];
-                            final credit = m['credit'];
-                            final loan = m['loan'];
-                            final total = (credit as num) + (loan as num);
-                            final creditDetails = (m['creditDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-                            final loanDetails = (m['loanDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-                            
-                            if (val == 'csv') {
-                              String formatDetails(List<Map<String, dynamic>> details) {
-                                if (details.isEmpty) return '';
-                                return details.map((d) => '${d['title']}: ${d['amount']}').join(' | ').replaceAll('"', '""');
-                              }
-                              final cDetailsStr = formatDetails(creditDetails);
-                              final lDetailsStr = formatDetails(loanDetails);
-                              buffer.writeln('"$label",$credit,$loan,$total,"$cDetailsStr","$lDetailsStr"');
-                            } else {
-                              buffer.writeln('\n[$label]');
-                              buffer.writeln('Credit Cards: ₹$credit');
-                              if (creditDetails.isNotEmpty) {
-                                buffer.writeln('  Details: ${creditDetails.map((d) => '${d['title']}: ₹${d['amount']}').join(' | ')}');
-                              }
-                              buffer.writeln('Loans: ₹$loan');
-                              if (loanDetails.isNotEmpty) {
-                                buffer.writeln('  Details: ${loanDetails.map((d) => '${d['title']}: ₹${d['amount']}').join(' | ')}');
-                              }
-                              buffer.writeln('Total: ₹$total');
-                              buffer.writeln('-' * 40);
-                            }
-                          }
-                          final dir = await getTemporaryDirectory();
-                          if (val == 'csv') {
-                            final file = File('${dir.path}/Vault_Monthly_Report.csv');
-                            await file.writeAsString(buffer.toString());
-                            await Share.shareXFiles([XFile(file.path)], text: 'Vault Notes - Monthly Report (CSV)');
-                          } else {
-                            final file = File('${dir.path}/Vault_Monthly_Report.txt');
-                            await file.writeAsString(buffer.toString());
-                            await Share.shareXFiles([XFile(file.path)], text: 'Vault Notes - Monthly Report (TXT)');
-                          }
-                        } catch (e) {
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error exporting: $e')));
-                          }
-                        }
-                      },
-                      itemBuilder: (context) => [
-                        const PopupMenuItem(value: 'csv', child: Text('Export as CSV')),
-                        const PopupMenuItem(value: 'txt', child: Text('Export as TXT')),
-                      ],
-                    ),
+
+
                     IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      iconSize: 22,
                       icon: Icon(Icons.add_circle_outline, color: isDark ? Colors.blue.shade400 : Colors.blue.shade700),
                       tooltip: 'Add Previous Data',
                       onPressed: () async {
@@ -377,6 +899,9 @@ class _BillsViewState extends ConsumerState<BillsView> {
                       },
                     ),
                     IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      iconSize: 22,
                       icon: Icon(Icons.edit_calendar, color: isDark ? Colors.orange.shade400 : Colors.orange.shade700),
                       tooltip: 'Edit Previous Data',
                       onPressed: () async {
@@ -402,12 +927,12 @@ class _BillsViewState extends ConsumerState<BillsView> {
                             creditDetails = (existing['creditDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
                             loanDetails = (existing['loanDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
                             
-                            creditControllers = creditDetails.map((d) => TextEditingController(text: (d['amount'] as num).toDouble().toStringAsFixed(0))).toList();
-                            loanControllers = loanDetails.map((d) => TextEditingController(text: (d['amount'] as num).toDouble().toStringAsFixed(0))).toList();
+                            creditControllers = creditDetails.map((d) => TextEditingController(text: NumberFormat.decimalPattern('en_IN').format((d['amount'] as num).toDouble()))).toList();
+                            loanControllers = loanDetails.map((d) => TextEditingController(text: NumberFormat.decimalPattern('en_IN').format((d['amount'] as num).toDouble()))).toList();
                             
                             if (creditDetails.isEmpty && loanDetails.isEmpty) {
-                              rawCreditController = TextEditingController(text: rawCredit > 0 ? rawCredit.toStringAsFixed(0) : '');
-                              rawLoanController = TextEditingController(text: rawLoan > 0 ? rawLoan.toStringAsFixed(0) : '');
+                              rawCreditController = TextEditingController(text: rawCredit > 0 ? NumberFormat.decimalPattern('en_IN').format(rawCredit) : '');
+                              rawLoanController = TextEditingController(text: rawLoan > 0 ? NumberFormat.decimalPattern('en_IN').format(rawLoan) : '');
                             } else {
                               rawCreditController = null;
                               rawLoanController = null;
@@ -423,195 +948,373 @@ class _BillsViewState extends ConsumerState<BillsView> {
                         }
                         
                         loadData(selectedMonth, DateTime.now().year);
-                        
-                        final res = await showDialog<bool>(
+
+                        bool? sheetResult;
+                        await showModalBottomSheet(
                           context: context,
+                          isScrollControlled: true,
+                          shape: const RoundedRectangleBorder(
+                              borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
                           builder: (dctx) => StatefulBuilder(
-                            builder: (dctx, setDialogState) {
+                            builder: (dctx, setSheetState) {
                               void onMonthYearChanged() {
                                 int y = int.tryParse(yearController.text) ?? DateTime.now().year;
                                 loadData(selectedMonth, y);
-                                setDialogState(() {});
+                                setSheetState(() {});
                               }
-                              
-                              return AlertDialog(
-                                title: const Text('Edit Data'),
-                                content: SingleChildScrollView(
+
+                              return Padding(
+                                padding: EdgeInsets.only(bottom: MediaQuery.of(dctx).viewInsets.bottom),
+                                child: Container(
+                                  constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+                                  decoration: BoxDecoration(
+                                    color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                                  ),
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: DropdownButtonFormField<int>(
-                                              value: selectedMonth,
-                                              decoration: const InputDecoration(labelText: 'Month'),
-                                              items: List.generate(12, (i) => DropdownMenuItem(value: i + 1, child: Text(DateFormat.MMM().format(DateTime(2000, i + 1))))),
-                                              onChanged: (v) {
-                                                selectedMonth = v!;
-                                                onMonthYearChanged();
-                                              },
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: TextField(
-                                              controller: yearController,
-                                              keyboardType: TextInputType.number,
-                                              decoration: const InputDecoration(labelText: 'Year'),
-                                              onChanged: (_) => onMonthYearChanged(),
-                                            ),
-                                          ),
-                                        ],
+                                      // Handle bar
+                                      Container(
+                                        height: 4,
+                                        width: 40,
+                                        margin: const EdgeInsets.only(top: 12, bottom: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade300,
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
                                       ),
-                                      const SizedBox(height: 16),
-                                      if (hasData && creditDetails.isEmpty && loanDetails.isEmpty) ...[
-                                        TextField(
-                                          controller: rawCreditController,
-                                          keyboardType: TextInputType.number,
-                                          decoration: const InputDecoration(labelText: 'Credit amount'),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        TextField(
-                                          controller: rawLoanController,
-                                          keyboardType: TextInputType.number,
-                                          decoration: const InputDecoration(labelText: 'Loan amount'),
-                                        ),
-                                      ],
-                                      if (creditDetails.isNotEmpty) ...[
-                                        Text('Credit Cards', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange.shade700)),
-                                        for (int i = 0; i < creditDetails.length; i++)
-                                          Row(
-                                            children: [
-                                              Expanded(
-                                                child: TextField(
-                                                  controller: creditControllers[i],
-                                                  keyboardType: TextInputType.number,
-                                                  decoration: InputDecoration(labelText: creditDetails[i]['title']),
+                                      // Header
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                        child: Row(
+                                          children: [
+                                            Container(
+                                              padding: const EdgeInsets.all(8),
+                                              decoration: BoxDecoration(
+                                                color: Colors.orange.withOpacity(0.12),
+                                                borderRadius: BorderRadius.circular(10),
+                                              ),
+                                              child: Icon(Icons.edit_calendar,
+                                                  color: isDark ? Colors.orange.shade400 : Colors.orange.shade700,
+                                                  size: 20),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Text(
+                                                'Edit Data',
+                                                style: TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: isDark ? Colors.white : Colors.black87,
                                                 ),
                                               ),
-                                              IconButton(
-                                                icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                                onPressed: () async {
-                                                  final confirm = await showDialog<bool>(
-                                                    context: context,
-                                                    builder: (c) => AlertDialog(
-                                                      title: const Text('Delete Entry'),
-                                                      content: const Text('Are you sure you want to remove this entry?'),
-                                                      actions: [
-                                                        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('No')),
-                                                        TextButton(
-                                                          onPressed: () => Navigator.pop(c, true), 
-                                                          child: const Text('Yes', style: TextStyle(color: Colors.red)),
+                                            ),
+                                            IconButton(
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                              icon: Icon(Icons.close, color: isDark ? Colors.white54 : Colors.black45),
+                                              onPressed: () => Navigator.pop(dctx),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Divider(height: 1, thickness: 0.5, color: isDark ? Colors.white12 : Colors.black12),
+                                      // Month & Year pickers
+                                      Padding(
+                                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text('Month',
+                                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                                                        color: isDark ? Colors.white38 : Colors.black38, letterSpacing: 0.5)),
+                                                  const SizedBox(height: 4),
+                                                  DropdownButtonFormField<int>(
+                                                    value: selectedMonth,
+                                                    decoration: InputDecoration(
+                                                      isDense: true,
+                                                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                                    ),
+                                                    items: List.generate(12, (i) => DropdownMenuItem(
+                                                        value: i + 1,
+                                                        child: Text(DateFormat.MMM().format(DateTime(2000, i + 1))))),
+                                                    onChanged: (v) {
+                                                      selectedMonth = v!;
+                                                      onMonthYearChanged();
+                                                    },
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text('Year',
+                                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                                                        color: isDark ? Colors.white38 : Colors.black38, letterSpacing: 0.5)),
+                                                  const SizedBox(height: 4),
+                                                  TextField(
+                                                    controller: yearController,
+                                                    keyboardType: TextInputType.number,
+                                                    decoration: InputDecoration(
+                                                      isDense: true,
+                                                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                                    ),
+                                                    onChanged: (_) => onMonthYearChanged(),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Divider(height: 1, thickness: 0.5, color: isDark ? Colors.white12 : Colors.black12),
+                                      // Scrollable content
+                                      Flexible(
+                                        child: SingleChildScrollView(
+                                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              if (hasData && creditDetails.isEmpty && loanDetails.isEmpty) ...[
+                                                TextField(
+                                                  controller: rawCreditController,
+                                                  keyboardType: TextInputType.number,
+                                                  decoration: InputDecoration(
+                                                    labelText: 'Credit amount',
+                                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                                    isDense: true,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 10),
+                                                TextField(
+                                                  controller: rawLoanController,
+                                                  keyboardType: TextInputType.number,
+                                                  decoration: InputDecoration(
+                                                    labelText: 'Loan amount',
+                                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                                    isDense: true,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 12),
+                                              ],
+                                              if (creditDetails.isNotEmpty) ...[
+                                                Padding(
+                                                  padding: const EdgeInsets.only(bottom: 8),
+                                                  child: Text('Credit Cards',
+                                                    style: TextStyle(
+                                                      fontWeight: FontWeight.bold,
+                                                      fontSize: 13,
+                                                      letterSpacing: 0.5,
+                                                      color: isDark ? Colors.orange.shade300 : Colors.orange.shade700,
+                                                    )),
+                                                ),
+                                                for (int i = 0; i < creditDetails.length; i++)
+                                                  Container(
+                                                    margin: const EdgeInsets.only(bottom: 8),
+                                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                                    decoration: BoxDecoration(
+                                                      color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade50,
+                                                      borderRadius: BorderRadius.circular(12),
+                                                      border: Border.all(color: isDark ? Colors.white12 : Colors.black12),
+                                                    ),
+                                                    child: Row(
+                                                      children: [
+                                                        Expanded(
+                                                          child: TextField(
+                                                            controller: creditControllers[i],
+                                                            keyboardType: TextInputType.number,
+                                                            decoration: InputDecoration(
+                                                              labelText: creditDetails[i]['title'],
+                                                              border: InputBorder.none,
+                                                              isDense: true,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        IconButton(
+                                                          icon: Icon(Icons.delete_outline, color: Colors.red.shade400, size: 20),
+                                                          padding: EdgeInsets.zero,
+                                                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                                          onPressed: () async {
+                                                            final confirm = await showDialog<bool>(
+                                                              context: context,
+                                                              builder: (c) => AlertDialog(
+                                                                title: const Text('Delete Entry'),
+                                                                content: const Text('Are you sure you want to remove this entry?'),
+                                                                actions: [
+                                                                  TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('No')),
+                                                                  TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Yes', style: TextStyle(color: Colors.red))),
+                                                                ],
+                                                              ),
+                                                            );
+                                                            if (confirm == true) {
+                                                              creditDetails.removeAt(i);
+                                                              creditControllers.removeAt(i);
+                                                              setSheetState(() {});
+                                                            }
+                                                          },
                                                         ),
                                                       ],
                                                     ),
-                                                  );
-                                                  if (confirm == true) {
-                                                    creditDetails.removeAt(i);
-                                                    creditControllers.removeAt(i);
-                                                    setDialogState(() {});
-                                                  }
-                                                },
-                                              ),
-                                            ],
-                                          ),
-                                        const SizedBox(height: 12),
-                                      ],
-                                      if (loanDetails.isNotEmpty) ...[
-                                        const Text('Loans', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1D63D2))),
-                                        for (int i = 0; i < loanDetails.length; i++)
-                                          Row(
-                                            children: [
-                                              Expanded(
-                                                child: TextField(
-                                                  controller: loanControllers[i],
-                                                  keyboardType: TextInputType.number,
-                                                  decoration: InputDecoration(labelText: loanDetails[i]['title']),
+                                                  ),
+                                                const SizedBox(height: 8),
+                                              ],
+                                              if (loanDetails.isNotEmpty) ...[
+                                                Padding(
+                                                  padding: const EdgeInsets.only(bottom: 8),
+                                                  child: Text('Loans',
+                                                    style: TextStyle(
+                                                      fontWeight: FontWeight.bold,
+                                                      fontSize: 13,
+                                                      letterSpacing: 0.5,
+                                                      color: isDark ? Colors.blue.shade300 : const Color(0xFF1D63D2),
+                                                    )),
                                                 ),
-                                              ),
-                                              IconButton(
-                                                icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                                onPressed: () async {
-                                                  final confirm = await showDialog<bool>(
-                                                    context: context,
-                                                    builder: (c) => AlertDialog(
-                                                      title: const Text('Delete Entry'),
-                                                      content: const Text('Are you sure you want to remove this entry?'),
-                                                      actions: [
-                                                        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('No')),
-                                                        TextButton(
-                                                          onPressed: () => Navigator.pop(c, true), 
-                                                          child: const Text('Yes', style: TextStyle(color: Colors.red)),
+                                                for (int i = 0; i < loanDetails.length; i++)
+                                                  Container(
+                                                    margin: const EdgeInsets.only(bottom: 8),
+                                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                                    decoration: BoxDecoration(
+                                                      color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade50,
+                                                      borderRadius: BorderRadius.circular(12),
+                                                      border: Border.all(color: isDark ? Colors.white12 : Colors.black12),
+                                                    ),
+                                                    child: Row(
+                                                      children: [
+                                                        Expanded(
+                                                          child: TextField(
+                                                            controller: loanControllers[i],
+                                                            keyboardType: TextInputType.number,
+                                                            decoration: InputDecoration(
+                                                              labelText: loanDetails[i]['title'],
+                                                              border: InputBorder.none,
+                                                              isDense: true,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        IconButton(
+                                                          icon: Icon(Icons.delete_outline, color: Colors.red.shade400, size: 20),
+                                                          padding: EdgeInsets.zero,
+                                                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                                          onPressed: () async {
+                                                            final confirm = await showDialog<bool>(
+                                                              context: context,
+                                                              builder: (c) => AlertDialog(
+                                                                title: const Text('Delete Entry'),
+                                                                content: const Text('Are you sure you want to remove this entry?'),
+                                                                actions: [
+                                                                  TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('No')),
+                                                                  TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Yes', style: TextStyle(color: Colors.red))),
+                                                                ],
+                                                              ),
+                                                            );
+                                                            if (confirm == true) {
+                                                              loanDetails.removeAt(i);
+                                                              loanControllers.removeAt(i);
+                                                              setSheetState(() {});
+                                                            }
+                                                          },
                                                         ),
                                                       ],
                                                     ),
-                                                  );
-                                                  if (confirm == true) {
-                                                    loanDetails.removeAt(i);
-                                                    loanControllers.removeAt(i);
-                                                    setDialogState(() {});
-                                                  }
-                                                },
-                                              ),
+                                                  ),
+                                              ],
+                                              if (!hasData)
+                                                Padding(
+                                                  padding: const EdgeInsets.symmetric(vertical: 20),
+                                                  child: Center(
+                                                    child: Text('No data recorded for this month.',
+                                                        style: TextStyle(
+                                                            color: isDark ? Colors.white38 : Colors.black38,
+                                                            fontStyle: FontStyle.italic)),
+                                                  ),
+                                                ),
+                                              const SizedBox(height: 8),
                                             ],
                                           ),
-                                      ],
-                                      if (!hasData)
-                                        const Padding(
-                                          padding: EdgeInsets.symmetric(vertical: 16),
-                                          child: Text('No data recorded for this month.', style: TextStyle(color: Colors.grey)),
                                         ),
-                                    ],
+                                      ),
+                                      // Action buttons
+                                      SafeArea(
+                                        top: false,
+                                        child: Padding(
+                                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+                                          child: Row(
+                                            children: [
+                                            Expanded(
+                                              child: OutlinedButton(
+                                                onPressed: () => Navigator.pop(dctx),
+                                                style: OutlinedButton.styleFrom(
+                                                  padding: const EdgeInsets.symmetric(vertical: 13),
+                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                                ),
+                                                child: const Text('Cancel'),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: ElevatedButton(
+                                                onPressed: !hasData ? null : () async {
+                                                  int y = int.tryParse(yearController.text) ?? DateTime.now().year;
+
+                                                  if (creditDetails.isEmpty && loanDetails.isEmpty) {
+                                                    double cTotal = double.tryParse(rawCreditController!.text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
+                                                    double lTotal = double.tryParse(rawLoanController!.text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
+                                                    await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
+                                                      y, selectedMonth, cTotal, lTotal,
+                                                    );
+                                                  } else {
+                                                    for (int i = 0; i < creditDetails.length; i++) {
+                                                      double amt = double.tryParse(creditControllers[i].text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
+                                                      creditDetails[i]['amount'] = amt;
+                                                    }
+                                                    for (int i = 0; i < loanDetails.length; i++) {
+                                                      double amt = double.tryParse(loanControllers[i].text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
+                                                      loanDetails[i]['amount'] = amt;
+                                                    }
+                                                    double cTotal = creditDetails.fold<double>(0.0, (s, x) => s + (x['amount'] as num).toDouble());
+                                                    double lTotal = loanDetails.fold<double>(0.0, (s, x) => s + (x['amount'] as num).toDouble());
+                                                    await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
+                                                      y, selectedMonth, cTotal, lTotal,
+                                                      creditDetails: creditDetails,
+                                                      loanDetails: loanDetails,
+                                                    );
+                                                  }
+                                                  sheetResult = true;
+                                                  Navigator.pop(dctx);
+                                                },
+                                                style: ElevatedButton.styleFrom(
+                                                  backgroundColor: const Color(0xFF1D63D2),
+                                                  foregroundColor: Colors.white,
+                                                  padding: const EdgeInsets.symmetric(vertical: 13),
+                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                                ),
+                                                child: const Text('Update', style: TextStyle(fontWeight: FontWeight.bold)),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                   ),
                                 ),
-                                actions: [
-                                  TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
-                                  TextButton(
-                                    onPressed: () async {
-                                      if (!hasData) {
-                                        Navigator.pop(dctx, false);
-                                        return;
-                                      }
-                                      int y = int.tryParse(yearController.text) ?? DateTime.now().year;
-                                      
-                                      if (creditDetails.isEmpty && loanDetails.isEmpty) {
-                                        double cTotal = double.tryParse(rawCreditController!.text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
-                                        double lTotal = double.tryParse(rawLoanController!.text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
-                                        await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
-                                          y, selectedMonth, cTotal, lTotal,
-                                        );
-                                      } else {
-                                        for (int i = 0; i < creditDetails.length; i++) {
-                                          double amt = double.tryParse(creditControllers[i].text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
-                                          creditDetails[i]['amount'] = amt;
-                                        }
-                                        for (int i = 0; i < loanDetails.length; i++) {
-                                          double amt = double.tryParse(loanControllers[i].text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
-                                          loanDetails[i]['amount'] = amt;
-                                        }
-                                        
-                                        double cTotal = creditDetails.fold<double>(0.0, (s, x) => s + (x['amount'] as num).toDouble());
-                                        double lTotal = loanDetails.fold<double>(0.0, (s, x) => s + (x['amount'] as num).toDouble());
-                                        
-                                        await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
-                                          y, selectedMonth, cTotal, lTotal,
-                                          creditDetails: creditDetails,
-                                          loanDetails: loanDetails,
-                                        );
-                                      }
-                                      Navigator.pop(dctx, true);
-                                    },
-                                    child: const Text('Update'),
-                                  ),
-                                ],
                               );
                             },
                           ),
                         );
 
-                        if (res == true) {
+                        if (sheetResult == true) {
                           final newReports = await ref.read(vaultServiceProvider).loadMonthlyReports();
                           setModalState(() {
                             reports = newReports;
@@ -622,10 +1325,71 @@ class _BillsViewState extends ConsumerState<BillsView> {
                         }
                       },
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(ctx),
-                      tooltip: 'Close',
+                    PopupMenuButton<String>(
+                      padding: EdgeInsets.zero,
+                      icon: Icon(Icons.more_vert, color: isDark ? Colors.white70 : Colors.black87),
+                      tooltip: 'Export Options',
+                      onSelected: (val) async {
+                        try {
+                          final buffer = StringBuffer();
+                          if (val == 'csv') {
+                            buffer.writeln('Month,Credit Cards (Total),Loans (Total),Overall Total,Credit Details,Loan Details');
+                          } else {
+                            buffer.writeln('--- Vault Notes: Monthly Report ---');
+                          }
+                          
+                          for (final m in months) {
+                            final recorded = m['recorded'] as bool? ?? false;
+                            if (!recorded) continue;
+                            final label = m['label'];
+                            final credit = m['credit'];
+                            final loan = m['loan'];
+                            final total = (credit as num) + (loan as num);
+                            final creditDetails = (m['creditDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                            final loanDetails = (m['loanDetails'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                            
+                            if (val == 'csv') {
+                              String formatDetails(List<Map<String, dynamic>> details) {
+                                if (details.isEmpty) return '';
+                                return details.map((d) => '${d['title']}: ${d['amount']}').join(' | ').replaceAll('"', '""');
+                              }
+                              final cDetailsStr = formatDetails(creditDetails);
+                              final lDetailsStr = formatDetails(loanDetails);
+                              buffer.writeln('"$label",$credit,$loan,$total,"$cDetailsStr","$lDetailsStr"');
+                            } else {
+                              buffer.writeln('\n[$label]');
+                              buffer.writeln('Credit Cards: ₹$credit');
+                              if (creditDetails.isNotEmpty) {
+                                buffer.writeln('  Details: ${creditDetails.map((d) => '${d['title']}: ₹${d['amount']}').join(' | ')}');
+                              }
+                              buffer.writeln('Loans: ₹$loan');
+                              if (loanDetails.isNotEmpty) {
+                                buffer.writeln('  Details: ${loanDetails.map((d) => '${d['title']}: ₹${d['amount']}').join(' | ')}');
+                              }
+                              buffer.writeln('Total: ₹$total');
+                              buffer.writeln('-' * 40);
+                            }
+                          }
+                          final dir = await getTemporaryDirectory();
+                          if (val == 'csv') {
+                            final file = File('${dir.path}/Vault_Monthly_Report.csv');
+                            await file.writeAsString(buffer.toString());
+                            await Share.shareXFiles([XFile(file.path)], text: 'Vault Notes - Monthly Report (CSV)');
+                          } else {
+                            final file = File('${dir.path}/Vault_Monthly_Report.txt');
+                            await file.writeAsString(buffer.toString());
+                            await Share.shareXFiles([XFile(file.path)], text: 'Vault Notes - Monthly Report (TXT)');
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error exporting: $e')));
+                          }
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(value: 'csv', child: Text('Export as CSV')),
+                        const PopupMenuItem(value: 'txt', child: Text('Export as TXT')),
+                      ],
                     ),
                   ],
                 ),
@@ -1135,19 +1899,30 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                       style: TextStyle(
                                         fontSize: 17,
                                         fontWeight: FontWeight.bold,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primary,
+                                        color: Theme.of(context).colorScheme.primary,
                                       ),
                                     ),
-                                    // const SizedBox(width: 8),
-                                    const Spacer(), // pushes icon to right
+                                    const Spacer(), // pushes icons to right
 
+                                    // EMI Report Shortcut
                                     InkWell(
-                                      borderRadius:
-                                      BorderRadius.circular(8),
-                                      onTap: () =>
-                                          _showMonthlyReport(bills),
+                                      borderRadius: BorderRadius.circular(8),
+                                      onTap: () => _showEmiReport(context, isDark),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(6.0),
+                                        child: Icon(
+                                          Icons.pie_chart_outline,
+                                          size: 25,
+                                          color: Theme.of(context).colorScheme.primary,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+
+                                    // Monthly Report Shortcut
+                                    InkWell(
+                                      borderRadius: BorderRadius.circular(8),
+                                      onTap: () => _showMonthlyReport(bills),
                                       child: Padding(
                                         padding: const EdgeInsets.all(6.0),
                                         child: Image.asset(
@@ -1454,12 +2229,12 @@ class _BillsViewState extends ConsumerState<BillsView> {
                       ),
                       if (dayBills.isNotEmpty) ...[
                         const SizedBox(height: 4),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: dayBills
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: 3.0,
+                          runSpacing: 2.0,
+                          children: dayBills.take(6)
                               .map((b) => Container(
-                            margin: const EdgeInsets.symmetric(
-                                horizontal: 1.5),
                             width: 6,
                             height: 6,
                             decoration: BoxDecoration(

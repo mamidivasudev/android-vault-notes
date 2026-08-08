@@ -354,7 +354,7 @@ class _MileageViewState extends ConsumerState<MileageView> {
     
     final remaining = nextService - currentOdo;
     
-    Color color = Colors.green;
+    Color color = Colors.teal;
     String kmNum = remaining.abs().toStringAsFixed(0);
     String prefixText = 'Next service due in ';
     String suffixText = '';
@@ -384,7 +384,7 @@ class _MileageViewState extends ConsumerState<MileageView> {
                 children: [
                   TextSpan(text: prefixText),
                   TextSpan(text: kmNum, style: const TextStyle(color: Colors.redAccent, fontSize: 15)),
-                  const TextSpan(text: ' km', style: TextStyle(color: Colors.green, fontSize: 15)),
+                  TextSpan(text: ' km', style: TextStyle(color: color, fontSize: 15)),
                   TextSpan(text: suffixText),
                 ],
               ),
@@ -531,7 +531,7 @@ class _MileageViewState extends ConsumerState<MileageView> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openEntrySheet(),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
         label: const Text('Add Entry'),

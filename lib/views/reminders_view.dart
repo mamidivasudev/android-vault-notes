@@ -219,6 +219,28 @@ class _RemindersViewState extends ConsumerState<RemindersView> {
                         ),
                       ),
                     ],
+                    if (reminder.referenceDate != null) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.calendar_today_rounded,
+                            size: 12,
+                            color: isDark ? Colors.white60 : Colors.black45,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Used/Started: ${DateFormat('dd MMM yyyy').format(reminder.referenceDate!)}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isDark ? Colors.white60 : Colors.black45,
+                              fontStyle: FontStyle.italic,
+                              decoration: isActive ? null : TextDecoration.lineThrough,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Row(
                       children: [
@@ -397,6 +419,7 @@ class _ReminderDialogState extends ConsumerState<ReminderDialog> {
   late TextEditingController _titleController;
   late TextEditingController _descController;
   late DateTime _selectedDateTime;
+  DateTime? _referenceDate;
   late String _repeatType;
 
   @override
@@ -415,15 +438,7 @@ class _ReminderDialogState extends ConsumerState<ReminderDialog> {
     super.dispose();
   }
 
-  Future<void> _pickDateTime() async {
-    final DateTime? date = await showDatePicker(
-      context: context,
-      initialDate: _selectedDateTime,
-      firstDate: DateTime.now().subtract(const Duration(days: 365)),
-      lastDate: DateTime.now().add(const Duration(days: 3650)),
-    );
-    if (date == null) return;
-
+  Future<void> _pickTimeForDate(DateTime baseDate) async {
     if (!mounted) return;
     final TimeOfDay? time = await showTimePicker(
       context: context,
@@ -433,14 +448,27 @@ class _ReminderDialogState extends ConsumerState<ReminderDialog> {
 
     setState(() {
       _selectedDateTime = DateTime(
-        date.year,
-        date.month,
-        date.day,
+        baseDate.year,
+        baseDate.month,
+        baseDate.day,
         time.hour,
         time.minute,
       );
     });
   }
+
+  Future<void> _pickDateTime() async {
+    final DateTime? date = await showDatePicker(
+      context: context,
+      initialDate: _selectedDateTime,
+      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+      lastDate: DateTime.now().add(const Duration(days: 3650)),
+    );
+    if (date == null) return;
+    await _pickTimeForDate(date);
+  }
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -496,6 +524,26 @@ class _ReminderDialogState extends ConsumerState<ReminderDialog> {
                 ),
               ),
               const SizedBox(height: 16),
+              
+              Row(
+                children: [
+                  const Text('Quick Select:', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  const SizedBox(width: 8),
+                  ActionChip(
+                    label: const Text('Today', style: TextStyle(fontSize: 12)),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => _pickTimeForDate(DateTime.now()),
+                  ),
+                  const SizedBox(width: 8),
+                  ActionChip(
+                    label: const Text('Tomorrow', style: TextStyle(fontSize: 12)),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => _pickTimeForDate(DateTime.now().add(const Duration(days: 1))),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+
               InkWell(
                 onTap: _pickDateTime,
                 borderRadius: BorderRadius.circular(12),
@@ -514,7 +562,7 @@ class _ReminderDialogState extends ConsumerState<ReminderDialog> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text(
-                              'Date & Time',
+                              'Start / Reminder Date',
                               style: TextStyle(fontSize: 11, color: Colors.grey),
                             ),
                             const SizedBox(height: 2),
@@ -539,7 +587,7 @@ class _ReminderDialogState extends ConsumerState<ReminderDialog> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Repeat',
+                    'Remind me (Interval)',
                     style: TextStyle(fontSize: 11, color: Colors.grey),
                   ),
                   const SizedBox(height: 6),
@@ -583,6 +631,7 @@ class _ReminderDialogState extends ConsumerState<ReminderDialog> {
                 isDismissed: false,
                 createdAt: widget.reminder?.createdAt,
                 repeatType: _repeatType,
+                referenceDate: _selectedDateTime, // Automatically store this as reference
               );
               if (isEdit) {
                 ref.read(remindersProvider.notifier).updateReminder(newReminder);

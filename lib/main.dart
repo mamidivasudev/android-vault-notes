@@ -1424,9 +1424,47 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
               child: const Text('Cancel'),
             ),
             TextButton(
-              onPressed: selectedFiles.isEmpty ? null : () {
-                Navigator.pop(context);
-                ref.read(syncProvider.notifier).syncWithDrive(selectedFiles: selectedFiles.toList());
+              onPressed: selectedFiles.isEmpty ? null : () async {
+                final notes = ref.read(notesProvider);
+                final expenses = ref.read(expensesProvider);
+                final bills = ref.read(billsProvider);
+                
+                final isAppEmpty = notes.isEmpty && expenses.isEmpty && bills.isEmpty;
+                
+                if (isAppEmpty) {
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Row(
+                        children: [
+                          Icon(Icons.warning_amber_rounded, color: Colors.orange),
+                          SizedBox(width: 8),
+                          Text('Warning: Empty Data'),
+                        ],
+                      ),
+                      content: const Text(
+                        'Your local app appears to be completely empty. Backing up now will overwrite your Google Drive backup with blank data.\n\nDid you mean to Restore instead?'
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('Cancel Backup'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Overwrite Anyway', style: TextStyle(color: Colors.red)),
+                        ),
+                      ],
+                    ),
+                  );
+                  
+                  if (confirm != true) return;
+                }
+                
+                if (context.mounted) {
+                  Navigator.pop(context);
+                  ref.read(syncProvider.notifier).syncWithDrive(selectedFiles: selectedFiles.toList());
+                }
               },
               child: const Text('Backup'),
             ),

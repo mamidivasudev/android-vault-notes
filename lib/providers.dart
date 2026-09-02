@@ -7,6 +7,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'docs_feature/services/google_drive_service.dart' as docs_drive;
 import 'package:google_sign_in/google_sign_in.dart';
+import 'notification_service.dart';
 
 final vaultServiceProvider = Provider((ref) => VaultService());
 
@@ -1671,6 +1672,15 @@ class RemindersNotifier extends Notifier<List<Reminder>> {
     await _initFuture;
     state = [...state, reminder];
     _save();
+    if (!reminder.isDismissed) {
+      NotificationService().scheduleReminderNotification(
+        id: reminder.id,
+        title: reminder.title,
+        body: reminder.description.isNotEmpty ? reminder.description : 'You have a reminder!',
+        dateTime: reminder.dateTime,
+        repeatType: reminder.repeatType,
+      );
+    }
   }
 
   Future<void> updateReminder(Reminder reminder) async {
@@ -1700,7 +1710,27 @@ class RemindersNotifier extends Notifier<List<Reminder>> {
         repeatType: reminder.repeatType,
       );
       state = [...state, nextReminder];
+      NotificationService().scheduleReminderNotification(
+        id: nextReminder.id,
+        title: nextReminder.title,
+        body: nextReminder.description.isNotEmpty ? nextReminder.description : 'You have a reminder!',
+        dateTime: nextReminder.dateTime,
+        repeatType: nextReminder.repeatType,
+      );
     }
+
+    if (reminder.isDismissed) {
+      NotificationService().cancelReminderNotification(reminder.id);
+    } else {
+      NotificationService().scheduleReminderNotification(
+        id: reminder.id,
+        title: reminder.title,
+        body: reminder.description.isNotEmpty ? reminder.description : 'You have a reminder!',
+        dateTime: reminder.dateTime,
+        repeatType: reminder.repeatType,
+      );
+    }
+
     _save();
   }
 
@@ -1708,12 +1738,16 @@ class RemindersNotifier extends Notifier<List<Reminder>> {
     await _initFuture;
     state = state.where((r) => r.id != id).toList();
     _save();
+    NotificationService().cancelReminderNotification(id);
   }
 
   Future<void> deleteReminders(List<String> ids) async {
     await _initFuture;
     state = state.where((r) => !ids.contains(r.id)).toList();
     _save();
+    for (final id in ids) {
+      NotificationService().cancelReminderNotification(id);
+    }
   }
 
   void _save() {

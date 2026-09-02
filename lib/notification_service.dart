@@ -3,6 +3,96 @@ import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'vault_service.dart';
+import 'models.dart';
+
+@pragma('vm:entry-point')
+void onBackgroundNotificationAction(NotificationResponse response) async {
+  if (response.actionId == null || response.payload == null) return;
+  final String action = response.actionId!;
+  final String reminderId = response.payload!;
+
+  // Initialize timezone just in case
+  tz.initializeTimeZones();
+
+  final service = VaultService();
+  final data = await service.loadVaultData();
+  final remindersList = data['reminders'] as List? ?? [];
+  final reminders = remindersList.map((r) => Reminder.fromJson(r)).toList();
+
+  final index = reminders.indexWhere((r) => r.id == reminderId);
+  if (index == -1) return;
+
+  Reminder reminder = reminders[index];
+
+  if (action == 'action_done') {
+    if (reminder.repeatType != 'none') {
+      // Calculate next date
+      DateTime nextDate = reminder.dateTime;
+      if (reminder.repeatType == 'daily') {
+        nextDate = nextDate.add(const Duration(days: 1));
+      } else if (reminder.repeatType == 'weekly') {
+        nextDate = nextDate.add(const Duration(days: 7));
+      } else if (reminder.repeatType == 'monthly') {
+        nextDate = DateTime(nextDate.year, nextDate.month + 1, nextDate.day);
+      }
+      final nextReminder = Reminder(
+        title: reminder.title,
+        description: reminder.description,
+        dateTime: nextDate,
+        isDismissed: false,
+        repeatType: reminder.repeatType,
+      );
+      reminders.add(nextReminder);
+      
+      // Schedule the next one
+      NotificationService().scheduleReminderNotification(
+        id: nextReminder.id,
+        title: nextReminder.title,
+        body: nextReminder.description.isNotEmpty ? nextReminder.description : 'You have a reminder!',
+        dateTime: nextReminder.dateTime,
+        repeatType: nextReminder.repeatType,
+      );
+    }
+    
+    // Mark old as dismissed
+    reminders[index] = reminder.copyWith(isDismissed: true);
+    // Cancel its notification just in case
+    NotificationService().cancelReminderNotification(reminder.id);
+  } 
+  else if (action == 'action_snooze_1h') {
+    reminder = reminder.copyWith(
+      dateTime: DateTime.now().add(const Duration(hours: 1)),
+      isDismissed: false,
+    );
+    reminders[index] = reminder;
+    NotificationService().scheduleReminderNotification(
+      id: reminder.id,
+      title: reminder.title,
+      body: reminder.description.isNotEmpty ? reminder.description : 'You have a reminder!',
+      dateTime: reminder.dateTime,
+      repeatType: reminder.repeatType,
+    );
+  } 
+  else if (action == 'action_snooze_1d') {
+    reminder = reminder.copyWith(
+      dateTime: DateTime.now().add(const Duration(days: 1)),
+      isDismissed: false,
+    );
+    reminders[index] = reminder;
+    NotificationService().scheduleReminderNotification(
+      id: reminder.id,
+      title: reminder.title,
+      body: reminder.description.isNotEmpty ? reminder.description : 'You have a reminder!',
+      dateTime: reminder.dateTime,
+      repeatType: reminder.repeatType,
+    );
+  }
+
+  // Save back to vault
+  await service.saveReminders(reminders);
+}
 
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
@@ -34,8 +124,10 @@ class NotificationService {
     await flutterLocalNotificationsPlugin.initialize(
       initializationSettings,
       onDidReceiveNotificationResponse: (NotificationResponse response) async {
-        // Handle notification tap
+        // App is foreground/background
+        onBackgroundNotificationAction(response);
       },
+      onDidReceiveBackgroundNotificationResponse: onBackgroundNotificationAction,
     );
 
     _isInitialized = true;
@@ -160,5 +252,77 @@ class NotificationService {
 
   Future<void> cancelNotification(int id) async {
     await flutterLocalNotificationsPlugin.cancel(id);
+  }
+
+  Future<void> scheduleReminderNotification({
+    required String id,
+    required String title,
+    required String body,
+    required DateTime dateTime,
+    required String repeatType,
+  }) async {
+    await cancelReminderNotification(id);
+
+    final scheduledDate = tz.TZDateTime.from(dateTime, tz.local);
+    if (scheduledDate.isBefore(tz.TZDateTime.now(tz.local)) && repeatType == 'none') {
+      return; // Do not schedule past non-repeating reminders
+    }
+
+    const AndroidNotificationDetails androidPlatformChannelSpecifics = AndroidNotificationDetails(
+      'reminders_channel',
+      'Task Reminders',
+      channelDescription: 'General reminders for tasks and notes',
+      importance: Importance.max,
+      priority: Priority.high,
+      actions: <AndroidNotificationAction>[
+        AndroidNotificationAction(
+          'action_done',
+          'Done',
+          showsUserInterface: true,
+        ),
+        AndroidNotificationAction(
+          'action_snooze_1h',
+          'Snooze 1h',
+          showsUserInterface: true,
+        ),
+        AndroidNotificationAction(
+          'action_snooze_1d',
+          'Snooze 1d',
+          showsUserInterface: true,
+        ),
+      ],
+    );
+    const NotificationDetails platformChannelSpecifics = NotificationDetails(android: androidPlatformChannelSpecifics);
+
+    DateTimeComponents? matchDateTimeComponents;
+    switch (repeatType.toLowerCase()) {
+      case 'daily':
+        matchDateTimeComponents = DateTimeComponents.time;
+        break;
+      case 'weekly':
+        matchDateTimeComponents = DateTimeComponents.dayOfWeekAndTime;
+        break;
+      case 'monthly':
+        matchDateTimeComponents = DateTimeComponents.dayOfMonthAndTime;
+        break;
+      default:
+        matchDateTimeComponents = null;
+    }
+
+    await flutterLocalNotificationsPlugin.zonedSchedule(
+      id.hashCode,
+      title,
+      body,
+      scheduledDate,
+      platformChannelSpecifics,
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+      matchDateTimeComponents: matchDateTimeComponents,
+      payload: id, // Pass ID in payload so background action knows which reminder
+    );
+  }
+
+  Future<void> cancelReminderNotification(String reminderId) async {
+    await flutterLocalNotificationsPlugin.cancel(reminderId.hashCode);
   }
 }

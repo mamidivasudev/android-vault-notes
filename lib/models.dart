@@ -475,6 +475,7 @@ class Reminder {
   final bool isDismissed;
   final DateTime createdAt;
   final String repeatType;
+  final DateTime? referenceDate;
 
   Reminder({
     String? id,
@@ -484,6 +485,7 @@ class Reminder {
     this.isDismissed = false,
     DateTime? createdAt,
     this.repeatType = 'none',
+    this.referenceDate,
   })  : id = id ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now();
 
@@ -495,6 +497,7 @@ class Reminder {
         'isDismissed': isDismissed,
         'createdAt': createdAt.toIso8601String(),
         'repeatType': repeatType,
+        'referenceDate': referenceDate?.toIso8601String(),
       };
 
   factory Reminder.fromJson(Map<String, dynamic> json) => Reminder(
@@ -505,6 +508,7 @@ class Reminder {
         isDismissed: json['isDismissed'] == true,
         createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? '') ?? DateTime.now(),
         repeatType: json['repeatType']?.toString() ?? 'none',
+        referenceDate: json['referenceDate'] != null ? DateTime.tryParse(json['referenceDate'].toString()) : null,
       );
 
   Reminder copyWith({
@@ -514,6 +518,7 @@ class Reminder {
     bool? isDismissed,
     DateTime? createdAt,
     String? repeatType,
+    Object? referenceDate = _sentinel,
   }) =>
       Reminder(
         id: id,
@@ -523,6 +528,7 @@ class Reminder {
         isDismissed: isDismissed ?? this.isDismissed,
         createdAt: createdAt ?? this.createdAt,
         repeatType: repeatType ?? this.repeatType,
+        referenceDate: referenceDate == _sentinel ? this.referenceDate : referenceDate as DateTime?,
       );
 }
 

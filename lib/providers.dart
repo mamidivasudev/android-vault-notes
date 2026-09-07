@@ -4,6 +4,7 @@ import 'vault_service.dart';
 import 'services/google_drive_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
+import 'dart:async';
 import 'dart:convert';
 import 'docs_feature/services/google_drive_service.dart' as docs_drive;
 import 'package:google_sign_in/google_sign_in.dart';
@@ -1449,11 +1450,43 @@ final selectedTableCategoryProvider = NotifierProvider<SelectedTableCategoryNoti
 
 final vaultPathProvider = FutureProvider<String?>((ref) => ref.watch(vaultServiceProvider).getVaultPath());
 
-final googleDriveServiceProvider = Provider((ref) => GoogleDriveService());
+// Calls trySilentSignIn() on first build so any previously signed-in session
+// is restored automatically — no button click required on every app open.
+final googleDriveServiceProvider = Provider((ref) {
+  final service = GoogleDriveService();
+  // Silently restore the last session in the background.
+  // If the user was signed in before, this re-authenticates them with no UI.
+  service.trySilentSignIn();
+  return service;
+});
 
 final googleUserProvider = StreamProvider<GoogleSignInAccount?>((ref) {
   final service = ref.watch(googleDriveServiceProvider);
-  return service.onCurrentUserChanged;
+  // Create a StreamController that immediately emits the current user
+  // (resolved by trySilentSignIn on startup), then forwards all future changes.
+  // This ensures the UI reflects the signed-in state as soon as possible
+  // instead of waiting for the next change event.
+  final controller = StreamController<GoogleSignInAccount?>.broadcast();
+
+  // Emit the current user right away (may be null if silent sign-in not done yet)
+  Future.microtask(() async {
+    if (!controller.isClosed) {
+      controller.add(service.currentUser);
+    }
+  });
+
+  // Forward all subsequent user change events
+  final sub = service.onCurrentUserChanged.listen(
+    (user) { if (!controller.isClosed) controller.add(user); },
+    onError: (e) { if (!controller.isClosed) controller.addError(e); },
+  );
+
+  ref.onDispose(() {
+    sub.cancel();
+    controller.close();
+  });
+
+  return controller.stream;
 });
 
 enum SyncStatus { idle, syncing, success, error }
@@ -1688,10 +1721,7 @@ class RemindersNotifier extends Notifier<List<Reminder>> {
     final oldReminder = state.firstWhere((r) => r.id == reminder.id, orElse: () => reminder);
     final newlyDismissed = !oldReminder.isDismissed && reminder.isDismissed;
 
-    state = [
-      for (final r in state)
-        if (r.id == reminder.id) reminder else r
-    ];
+    Reminder finalReminder = reminder;
 
     if (newlyDismissed && reminder.repeatType != 'none') {
       DateTime nextDate = reminder.dateTime;
@@ -1702,32 +1732,28 @@ class RemindersNotifier extends Notifier<List<Reminder>> {
       } else if (reminder.repeatType == 'monthly') {
         nextDate = DateTime(nextDate.year, nextDate.month + 1, nextDate.day);
       }
-      final nextReminder = Reminder(
-        title: reminder.title,
-        description: reminder.description,
+      
+      finalReminder = reminder.copyWith(
         dateTime: nextDate,
-        isDismissed: false,
-        repeatType: reminder.repeatType,
-      );
-      state = [...state, nextReminder];
-      NotificationService().scheduleReminderNotification(
-        id: nextReminder.id,
-        title: nextReminder.title,
-        body: nextReminder.description.isNotEmpty ? nextReminder.description : 'You have a reminder!',
-        dateTime: nextReminder.dateTime,
-        repeatType: nextReminder.repeatType,
+        isDismissed: false, // Keep it active for the next occurrence
+        referenceDate: reminder.referenceDate ?? reminder.dateTime,
       );
     }
 
-    if (reminder.isDismissed) {
-      NotificationService().cancelReminderNotification(reminder.id);
+    state = [
+      for (final r in state)
+        if (r.id == reminder.id) finalReminder else r
+    ];
+
+    if (finalReminder.isDismissed) {
+      NotificationService().cancelReminderNotification(finalReminder.id);
     } else {
       NotificationService().scheduleReminderNotification(
-        id: reminder.id,
-        title: reminder.title,
-        body: reminder.description.isNotEmpty ? reminder.description : 'You have a reminder!',
-        dateTime: reminder.dateTime,
-        repeatType: reminder.repeatType,
+        id: finalReminder.id,
+        title: finalReminder.title,
+        body: finalReminder.description.isNotEmpty ? finalReminder.description : 'You have a reminder!',
+        dateTime: finalReminder.dateTime,
+        repeatType: finalReminder.repeatType,
       );
     }
 

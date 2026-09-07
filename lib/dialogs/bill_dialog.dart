@@ -18,8 +18,10 @@ class _BillDialogState extends ConsumerState<BillDialog> {
   final _amountController = TextEditingController();
   final _noteController = TextEditingController();
   final _totalLoanAmountController = TextEditingController();
+  final _emiAmountController = TextEditingController();
   final _totalEmisController = TextEditingController();
   final _paidEmisController = TextEditingController();
+  final _interestRateController = TextEditingController();
   final _titleFocusNode = FocusNode();
   int _dueDay = 1;
   String _type = 'Credit Card';
@@ -35,8 +37,10 @@ class _BillDialogState extends ConsumerState<BillDialog> {
       _amountController.text = widget.bill!.amount > 0 ? NumberFormat.decimalPattern('en_IN').format(widget.bill!.amount) : '';
       _noteController.text = widget.bill!.note ?? '';
       _totalLoanAmountController.text = widget.bill!.totalLoanAmount != null ? NumberFormat.decimalPattern('en_IN').format(widget.bill!.totalLoanAmount!) : '';
+      _emiAmountController.text = widget.bill!.emiAmount != null ? NumberFormat.decimalPattern('en_IN').format(widget.bill!.emiAmount!) : '';
       _totalEmisController.text = widget.bill!.totalEmis != null ? widget.bill!.totalEmis.toString() : '';
       _paidEmisController.text = widget.bill!.paidEmis != null ? widget.bill!.paidEmis.toString() : '';
+      _interestRateController.text = widget.bill!.interestRate != null ? widget.bill!.interestRate.toString() : '';
       _dueDay = widget.bill!.dueDate;
       _type = widget.bill!.type ?? 'Credit Card';
       _reminderDaysList = List<int>.from(widget.bill!.reminderDaysBeforeList);
@@ -56,8 +60,10 @@ class _BillDialogState extends ConsumerState<BillDialog> {
     _amountController.dispose();
     _noteController.dispose();
     _totalLoanAmountController.dispose();
+    _emiAmountController.dispose();
     _totalEmisController.dispose();
     _paidEmisController.dispose();
+    _interestRateController.dispose();
     _titleFocusNode.dispose();
     super.dispose();
   }
@@ -172,6 +178,24 @@ class _BillDialogState extends ConsumerState<BillDialog> {
                   style: const TextStyle(fontSize: 13),
                 ),
                 const SizedBox(height: 7),
+                TextField(
+                  controller: _emiAmountController,
+                  textInputAction: TextInputAction.next,
+                  decoration: InputDecoration(
+                    labelText: 'EMI Amount / Month (Optional)',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    prefixIcon: const Icon(Icons.currency_rupee, size: 16),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                    IndianThousandsFormatter(),
+                  ],
+                  style: const TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 7),
                 Row(
                   children: [
                     Expanded(
@@ -208,6 +232,21 @@ class _BillDialogState extends ConsumerState<BillDialog> {
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 7),
+                TextField(
+                  controller: _interestRateController,
+                  textInputAction: TextInputAction.next,
+                  decoration: InputDecoration(
+                    labelText: 'Rate of Interest (% p.a.)',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    prefixIcon: const Icon(Icons.percent, size: 16),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*'))],
+                  style: const TextStyle(fontSize: 13),
                 ),
                 const SizedBox(height: 7),
               ],
@@ -395,8 +434,10 @@ class _BillDialogState extends ConsumerState<BillDialog> {
       type: _type,
       note: _noteController.text.trim().isNotEmpty ? _noteController.text.trim() : null,
       totalLoanAmount: _type == 'Loan' && _totalLoanAmountController.text.trim().isNotEmpty ? double.tryParse(_totalLoanAmountController.text.trim().replaceAll(',', '')) : null,
+      emiAmount: _type == 'Loan' && _emiAmountController.text.trim().isNotEmpty ? double.tryParse(_emiAmountController.text.trim().replaceAll(',', '')) : null,
       totalEmis: _type == 'Loan' && _totalEmisController.text.trim().isNotEmpty ? int.tryParse(_totalEmisController.text.trim()) : null,
       paidEmis: _type == 'Loan' && _paidEmisController.text.trim().isNotEmpty ? int.tryParse(_paidEmisController.text.trim()) : null,
+      interestRate: _type == 'Loan' && _interestRateController.text.trim().isNotEmpty ? double.tryParse(_interestRateController.text.trim()) : null,
     );
 
     if (widget.bill == null) {

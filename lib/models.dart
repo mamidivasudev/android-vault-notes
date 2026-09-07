@@ -550,6 +550,8 @@ class Bill {
   final int? totalEmis;
   final int? paidEmis;
   final String? lastEmiPaidMonth; // e.g. '2026-08', to avoid double-counting
+  final double? interestRate;
+  final double? emiAmount;
 
   Bill({
     String? id,
@@ -569,6 +571,8 @@ class Bill {
     this.totalEmis,
     this.paidEmis,
     this.lastEmiPaidMonth,
+    this.interestRate,
+    this.emiAmount,
   }) : id = id ?? const Uuid().v4(),
        reminderDaysBeforeList = reminderDaysBeforeList ?? [reminderDaysBefore];
 
@@ -590,6 +594,8 @@ class Bill {
         'totalEmis': totalEmis,
         'paidEmis': paidEmis,
         'lastEmiPaidMonth': lastEmiPaidMonth,
+        'interestRate': interestRate,
+        'emiAmount': emiAmount,
       };
 
   factory Bill.fromJson(Map<String, dynamic> json) {
@@ -616,6 +622,8 @@ class Bill {
         totalEmis: json['totalEmis'] as int?,
         paidEmis: json['paidEmis'] as int?,
         lastEmiPaidMonth: json['lastEmiPaidMonth']?.toString(),
+        interestRate: json['interestRate'] != null ? (json['interestRate'] as num).toDouble() : null,
+        emiAmount: json['emiAmount'] != null ? (json['emiAmount'] as num).toDouble() : null,
       );
   }
 
@@ -636,6 +644,8 @@ class Bill {
     int? totalEmis,
     int? paidEmis,
     Object? lastEmiPaidMonth = _sentinel,
+    Object? interestRate = _sentinel,
+    Object? emiAmount = _sentinel,
   }) =>
       Bill(
         id: id,
@@ -655,6 +665,8 @@ class Bill {
         totalEmis: totalEmis ?? this.totalEmis,
         paidEmis: paidEmis ?? this.paidEmis,
         lastEmiPaidMonth: lastEmiPaidMonth == _sentinel ? this.lastEmiPaidMonth : lastEmiPaidMonth as String?,
+        interestRate: interestRate == _sentinel ? this.interestRate : interestRate as double?,
+        emiAmount: emiAmount == _sentinel ? this.emiAmount : emiAmount as double?,
       );
 }
 

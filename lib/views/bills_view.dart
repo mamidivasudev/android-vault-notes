@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'dart:ui' as ui;
+import 'package:flutter/rendering.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models.dart';
@@ -41,7 +43,17 @@ class _BillsViewState extends ConsumerState<BillsView> {
               .where((b) => (b.type ?? 'Credit Card') == 'Credit Card')
               .toList();
 
-          String fmt(double v) => '₹${NumberFormat.decimalPattern('en_IN').format(v)}';
+          String fmt(double v) => '\u20b9${NumberFormat.decimalPattern('en_IN').format(v)}';
+
+          // FIX: Returns true ONLY when the bill was actually paid in the current month.
+          // Previously the green badge was always shown, or was based on hardcoded bank names.
+          final now = DateTime.now();
+          bool isPaidThisMonth(Bill bill) {
+            if (!bill.isPaid) return false;
+            if (bill.lastPaidDate == null) return false;
+            return bill.lastPaidDate!.year == now.year &&
+                bill.lastPaidDate!.month == now.month;
+          }
 
           Future<void> editLoan(Bill loan) async {
             final leftController = TextEditingController(
@@ -58,6 +70,12 @@ class _BillsViewState extends ConsumerState<BillsView> {
             final paidEmisController = TextEditingController(
               text: (loan.paidEmis ?? 0).toString(),
             );
+            final interestRateController = TextEditingController(
+              text: loan.interestRate?.toString() ?? '',
+            );
+            final emiAmountController = TextEditingController(
+              text: loan.emiAmount != null ? NumberFormat.decimalPattern('en_IN').format(loan.emiAmount!) : '',
+            );
 
             final saved = await showDialog<bool>(
               context: context,
@@ -70,13 +88,19 @@ class _BillsViewState extends ConsumerState<BillsView> {
                       TextField(
                         controller: totalController,
                         keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(labelText: 'Total Loan Amount (₹)'),
+                        decoration: const InputDecoration(labelText: 'Total Loan Amount (\u20b9)'),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: emiAmountController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'EMI Amount / Month (\u20b9)'),
                       ),
                       const SizedBox(height: 8),
                       TextField(
                         controller: leftController,
                         keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(labelText: 'Left Amount (₹)'),
+                        decoration: const InputDecoration(labelText: 'Amount Left (\u20b9)'),
                       ),
                       const SizedBox(height: 8),
                       TextField(
@@ -89,6 +113,12 @@ class _BillsViewState extends ConsumerState<BillsView> {
                         controller: paidEmisController,
                         keyboardType: TextInputType.number,
                         decoration: const InputDecoration(labelText: 'EMIs Paid'),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: interestRateController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(labelText: 'Interest Rate (% p.a.)'),
                       ),
                     ],
                   ),
@@ -108,13 +138,17 @@ class _BillsViewState extends ConsumerState<BillsView> {
               final newTotal = double.tryParse(totalController.text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? loan.totalLoanAmount;
               final newTotalEmis = int.tryParse(totalEmisController.text.trim()) ?? loan.totalEmis;
               final newPaidEmis = int.tryParse(paidEmisController.text.trim()) ?? (loan.paidEmis ?? 0);
+              final newInterestRate = double.tryParse(interestRateController.text.trim());
+              final newEmiAmount = double.tryParse(emiAmountController.text.replaceAll(RegExp(r'[^0-9.]'), ''));
 
               ref.read(billsProvider.notifier).updateBill(
                 loan.copyWith(
                   amount: newLeft,
                   totalLoanAmount: newTotal,
+                  emiAmount: newEmiAmount,
                   totalEmis: newTotalEmis,
                   paidEmis: newPaidEmis,
+                  interestRate: newInterestRate,
                 ),
               );
 
@@ -154,62 +188,74 @@ class _BillsViewState extends ConsumerState<BillsView> {
             }
           }
 
-          int getCreditCardDefaultPaid(String title) {
-            final t = title.toLowerCase();
-            if (t.contains('hdfc')) return 5;
-            if (t.contains('idfc')) return 4;
-            if (t.contains('sbi')) return 5;
-            if (t.contains('equits') || t.contains('equitas')) return 1;
-            if (t.contains('yes')) return 1;
-            return 0;
-          }
+          // FIX: Removed getCreditCardDefaultPaid() function entirely.
+          // It was assigning fake paid month counts based on bank name patterns:
+          // HDFC->5, SBI->5, IDFC->4, Equitas->1, YES->1.
+          // This showed completely wrong "paid history" to the user.
+          // Now we ONLY use the real paidEmis field stored in the Bill model.
 
-          Future<void> showPaidMonths(Bill loan) async {
-            bool isCreditCard = loan.type != 'Loan';
-            int paidCount = loan.paidEmis ?? (isCreditCard ? getCreditCardDefaultPaid(loan.title) : 0);
+          Future<void> showPaidMonths(Bill bill) async {
+            final bool isCreditCard = bill.type != 'Loan';
+            // Use only real paidEmis data — always default to 0, never fake values
+            int paidCount = bill.paidEmis ?? 0;
 
             await showDialog(
               context: context,
               builder: (dctx) => StatefulBuilder(
                 builder: (dctx, setDialogState) {
-                  final now = DateTime.now();
                   List<String> months = [];
                   for (int i = paidCount - 1; i >= 0; i--) {
                     final d = DateTime(now.year, now.month - i);
-                    months.add(DateFormat.MMM().format(d));
+                    months.add(DateFormat('MMM yyyy').format(d));
                   }
 
                   return AlertDialog(
-                    title: Text('${loan.title} Paid Months'),
+                    title: Text('${bill.title} \u2014 Paid Months'),
                     content: SizedBox(
                       width: double.maxFinite,
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // Credit cards allow user to adjust paid count manually
                           if (isCreditCard) ...[
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Text('Total EMIs:', style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.orange.shade300 : Colors.orange.shade700)),
+                                Text(
+                                  'Months Paid:',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: isDark ? Colors.orange.shade300 : Colors.orange.shade700,
+                                  ),
+                                ),
                                 Row(
                                   children: [
                                     IconButton(
                                       icon: const Icon(Icons.remove_circle_outline),
                                       color: Colors.red.shade400,
-                                      onPressed: paidCount > 0 ? () {
-                                        setDialogState(() => paidCount--);
-                                        ref.read(billsProvider.notifier).updateBill(loan.copyWith(paidEmis: paidCount));
-                                        setSheetState(() {});
-                                      } : null,
+                                      onPressed: paidCount > 0
+                                          ? () {
+                                              setDialogState(() => paidCount--);
+                                              ref.read(billsProvider.notifier).updateBill(
+                                                    bill.copyWith(paidEmis: paidCount),
+                                                  );
+                                              setSheetState(() {});
+                                            }
+                                          : null,
                                     ),
-                                    Text('$paidCount', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                                    Text(
+                                      '$paidCount',
+                                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                    ),
                                     IconButton(
                                       icon: const Icon(Icons.add_circle_outline),
                                       color: Colors.green.shade600,
                                       onPressed: () {
                                         setDialogState(() => paidCount++);
-                                        ref.read(billsProvider.notifier).updateBill(loan.copyWith(paidEmis: paidCount));
+                                        ref.read(billsProvider.notifier).updateBill(
+                                              bill.copyWith(paidEmis: paidCount),
+                                            );
                                         setSheetState(() {});
                                       },
                                     ),
@@ -222,24 +268,40 @@ class _BillsViewState extends ConsumerState<BillsView> {
                           if (paidCount == 0)
                             const Padding(
                               padding: EdgeInsets.symmetric(vertical: 8),
-                              child: Text('No EMIs paid yet.', style: TextStyle(color: Colors.grey)),
+                              child: Text(
+                                'No months recorded yet.',
+                                style: TextStyle(color: Colors.grey),
+                              ),
                             )
                           else
                             Flexible(
                               child: SingleChildScrollView(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: months.map((m) => Padding(
-                                    padding: const EdgeInsets.symmetric(vertical: 4),
-                                    child: Text('• $m', style: const TextStyle(fontSize: 16)),
-                                  )).toList(),
+                                  children: months
+                                      .map((m) => Padding(
+                                            padding: const EdgeInsets.symmetric(vertical: 4),
+                                            child: Row(
+                                              children: [
+                                                Icon(Icons.check_circle_outline, size: 14, color: Colors.green.shade600),
+                                                const SizedBox(width: 8),
+                                                Text(m, style: const TextStyle(fontSize: 15)),
+                                              ],
+                                            ),
+                                          ))
+                                      .toList(),
                                 ),
                               ),
                             ),
                         ],
                       ),
                     ),
-                    actions: [TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('Close'))],
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dctx),
+                        child: const Text('Close'),
+                      ),
+                    ],
                   );
                 },
               ),
@@ -293,7 +355,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                               ),
                             ),
                             Text(
-                              '${loans.length} loan${loans.length == 1 ? '' : 's'} · ${creditCards.length} credit card${creditCards.length == 1 ? '' : 's'}',
+                              '${loans.length} loan${loans.length == 1 ? '' : 's'} \u00b7 ${creditCards.length} credit card${creditCards.length == 1 ? '' : 's'}',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: isDark ? Colors.white54 : Colors.black45,
@@ -319,77 +381,267 @@ class _BillsViewState extends ConsumerState<BillsView> {
                     child: ListView(
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                       children: [
-                      // Loans Section
-                      if (loans.isNotEmpty) ...[
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: Text(
-                            'Loans',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                              letterSpacing: 0.5,
-                              color: isDark ? Colors.white38 : Colors.black38,
-                            ),
-                          ),
-                        ),
-                        ...loans.map((loan) {
-                          final paid = loan.paidEmis ?? 0;
-                          final emisLeft = loan.totalEmis! - paid;
-                          final amountLeft = loan.amount;
-                          final progress = loan.totalEmis! > 0 ? paid / loan.totalEmis! : 0.0;
-
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade50,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: isDark ? Colors.white12 : Colors.black12,
-                                width: 1,
+                        // ── LOANS SECTION ──────────────────────────────────
+                        if (loans.isNotEmpty) ...[
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Text(
+                              'LOANS',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                                letterSpacing: 1.0,
+                                color: isDark ? Colors.white38 : Colors.black38,
                               ),
                             ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
+                          ),
+                          ...loans.map((loan) {
+                            final paid = loan.paidEmis ?? 0;
+                            final total = loan.totalEmis!;
+                            final emisLeft = total - paid;
+                            final amountLeft = loan.amount;
+                            final progress = total > 0 ? (paid / total).clamp(0.0, 1.0) : 0.0;
+                            // FIX: Only show the green badge if the bill is actually paid this month
+                            final paidThisMonth = isPaidThisMonth(loan);
+
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade50,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: isDark ? Colors.white12 : Colors.black12,
+                                  width: 1,
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          loan.title,
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 14,
+                                            color: isDark ? Colors.white : Colors.black87,
+                                          ),
+                                        ),
+                                      ),
+                                      Row(
+                                        children: [
+                                          PopupMenuButton<String>(
+                                            padding: EdgeInsets.zero,
+                                            icon: Icon(Icons.more_vert, size: 18,
+                                                color: isDark ? Colors.grey.shade400 : Colors.grey.shade600),
+                                            tooltip: 'Options',
+                                            onSelected: (val) {
+                                              if (val == 'edit') editLoan(loan);
+                                              else if (val == 'delete') deleteLoan(loan);
+                                            },
+                                            itemBuilder: (context) => [
+                                              const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                              const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                                            ],
+                                          ),
+                                          // FIX: Only show green badge when paid this month
+                                          if (paidThisMonth)
+                                            Container(
+                                              margin: const EdgeInsets.only(right: 4),
+                                              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                                              decoration: BoxDecoration(
+                                                color: Colors.green.shade600,
+                                                borderRadius: BorderRadius.circular(6),
+                                              ),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Text(
+                                                    DateFormat.MMM().format(now),
+                                                    style: const TextStyle(
+                                                      fontSize: 10,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: Colors.white,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  const Icon(Icons.check_circle, color: Colors.white, size: 12),
+                                                ],
+                                              ),
+                                            ),
+                                          IconButton(
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+                                            icon: Icon(Icons.info_outline, size: 18,
+                                                color: isDark ? Colors.grey.shade400 : Colors.grey.shade600),
+                                            tooltip: 'Paid Months',
+                                            onPressed: () => showPaidMonths(loan),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        'Total: ${fmt(loan.totalLoanAmount ?? 0)}',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: isDark ? Colors.white70 : Colors.black54,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Left: ${fmt(amountLeft)}',
+                                        style: const TextStyle(
+                                          color: Colors.red,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (loan.interestRate != null) ...[
+                                    const SizedBox(height: 4),
                                     Text(
-                                      loan.title,
+                                      'Interest: ${loan.interestRate}% p.a.',
                                       style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                        color: isDark ? Colors.white : Colors.black87,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w500,
+                                        color: isDark ? Colors.orange.shade300 : Colors.orange.shade800,
                                       ),
                                     ),
-                                    Row(
-                                      children: [
-                                        PopupMenuButton<String>(
-                                          padding: EdgeInsets.zero,
-                                          icon: Icon(Icons.more_vert, size: 18, color: isDark ? Colors.grey.shade400 : Colors.grey.shade600),
-                                          tooltip: 'Options',
-                                          onSelected: (val) {
-                                            if (val == 'edit') editLoan(loan);
-                                            else if (val == 'delete') deleteLoan(loan);
-                                          },
-                                          itemBuilder: (context) => [
-                                            const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                                            const PopupMenuItem(value: 'delete', child: Text('Delete')),
-                                          ],
+                                  ],
+                                  const SizedBox(height: 8),
+                                  // Progress bar
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: LinearProgressIndicator(
+                                      value: progress,
+                                      minHeight: 6,
+                                      backgroundColor: isDark ? Colors.white12 : Colors.black12,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        isDark ? Colors.green.shade400 : Colors.green.shade600,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      Text(
+                                        'Total: $total EMIs',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: isDark ? Colors.white54 : Colors.black45,
                                         ),
+                                      ),
+                                      const SizedBox(width: 16),
+                                      Text(
+                                        'Paid: $paid',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                          color: isDark ? Colors.green.shade400 : Colors.green.shade700,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 16),
+                                      Text(
+                                        'Left: $emisLeft',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                          color: isDark ? Colors.orange.shade300 : Colors.orange.shade700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                          const SizedBox(height: 8),
+                        ],
+
+                        // ── CREDIT CARDS SECTION ────────────────────────────
+                        if (creditCards.isNotEmpty) ...[
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Text(
+                              'CREDIT CARDS',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                                letterSpacing: 1.0,
+                                color: isDark ? Colors.white38 : Colors.black38,
+                              ),
+                            ),
+                          ),
+                          ...creditCards.map((card) {
+                            // FIX: Use real isPaidThisMonth — not the always-true (card.isPaid || !card.isPaid)
+                            final paidThisMonth = isPaidThisMonth(card);
+
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 10),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                              decoration: BoxDecoration(
+                                color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade50,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: paidThisMonth
+                                      ? Colors.green.withOpacity(0.35)
+                                      : (isDark ? Colors.white12 : Colors.black12),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          card.title,
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 14,
+                                            color: isDark ? Colors.white : Colors.black87,
+                                          ),
+                                        ),
+                                        if (card.amount > 0) ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            fmt(card.amount),
+                                            style: TextStyle(
+                                              color: isDark ? Colors.orange.shade300 : Colors.orange.shade700,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                  Row(
+                                    children: [
+                                      // FIX: Show green "Paid" badge ONLY when actually paid this month
+                                      if (paidThisMonth)
                                         Container(
                                           margin: const EdgeInsets.only(right: 4),
-                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
                                           decoration: BoxDecoration(
-                                            color: Colors.green,
+                                            color: Colors.green.shade600,
                                             borderRadius: BorderRadius.circular(6),
                                           ),
                                           child: Row(
+                                            mainAxisSize: MainAxisSize.min,
                                             children: [
                                               Text(
-                                                DateFormat.MMM().format(DateTime.now()),
+                                                DateFormat.MMM().format(now),
                                                 style: const TextStyle(
                                                   fontSize: 10,
                                                   fontWeight: FontWeight.bold,
@@ -397,206 +649,60 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                                 ),
                                               ),
                                               const SizedBox(width: 4),
-                                              const Icon(
-                                                Icons.check_circle,
-                                                color: Colors.white,
-                                                size: 12,
-                                              ),
+                                              const Icon(Icons.check_circle, color: Colors.white, size: 12),
                                             ],
                                           ),
                                         ),
-                                        IconButton(
-                                          padding: EdgeInsets.zero,
-                                          constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
-                                          icon: Icon(Icons.info_outline, size: 18,
-                                              color: isDark ? Colors.grey.shade400 : Colors.grey.shade600),
-                                          tooltip: 'Paid Months',
-                                          onPressed: () => showPaidMonths(loan),
+                                      // FIX: Show "Unpaid" badge when not paid this month
+                                      if (!paidThisMonth)
+                                        Container(
+                                          margin: const EdgeInsets.only(right: 4),
+                                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: Colors.orange.shade100,
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: Text(
+                                            'Unpaid',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.orange.shade800,
+                                            ),
+                                          ),
                                         ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      'Total: ${fmt(loan.totalLoanAmount ?? 0)}',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: isDark ? Colors.white70 : Colors.black54,
+                                      IconButton(
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                        icon: Icon(Icons.info_outline, size: 20,
+                                            color: isDark ? Colors.grey.shade400 : Colors.grey.shade600),
+                                        tooltip: 'Paid Months',
+                                        onPressed: () => showPaidMonths(card),
                                       ),
-                                    ),
-                                    Text(
-                                      'Left: ${fmt(amountLeft)}',
-                                      style: const TextStyle(
-                                        color: Colors.red,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                // Progress bar
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(4),
-                                  child: LinearProgressIndicator(
-                                    value: progress.clamp(0.0, 1.0),
-                                    minHeight: 5,
-                                    backgroundColor: isDark ? Colors.white12 : Colors.black12,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      isDark ? Colors.green.shade400 : Colors.green.shade600,
-                                    ),
+                                    ],
                                   ),
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
-                                  children: [
-                                    Text(
-                                      'Total EMIs: ${loan.totalEmis}',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: isDark ? Colors.white54 : Colors.black45,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 16),
-                                    Text(
-                                      'Paid: $paid',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                        color: isDark ? Colors.green.shade400 : Colors.green.shade700,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 16),
-                                    Text(
-                                      'Left: $emisLeft',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                        color: isDark ? Colors.orange.shade300 : Colors.orange.shade700,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          );
-                        }),
-                        const SizedBox(height: 8),
-                      ],
-                      // Credit Cards Section
-                      if (creditCards.isNotEmpty) ...[
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: Text(
-                            'Credit Cards',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                              letterSpacing: 0.5,
-                              color: isDark ? Colors.white38 : Colors.black38,
-                            ),
-                          ),
-                        ),
-                        ...creditCards.map((card) {
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                            decoration: BoxDecoration(
-                              color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade50,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: isDark ? Colors.white12 : Colors.black12,
-                                width: 1,
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+
+                        // ── EMPTY STATE ──────────────────────────────────────
+                        if (loans.isEmpty && creditCards.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.all(32),
+                            child: Center(
+                              child: Text(
+                                'No active bills found.',
+                                style: TextStyle(color: isDark ? Colors.white38 : Colors.black38),
                               ),
                             ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      card.title,
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                        color: isDark ? Colors.white : Colors.black87,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      fmt(card.amount),
-                                      style: TextStyle(
-                                        color: isDark ? Colors.orange.shade300 : Colors.orange.shade700,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                Row(
-                                  children: [
-                                    if (card.isPaid || !card.isPaid)
-                                      Container(
-                                        margin: const EdgeInsets.only(right: 4),
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: Colors.green,
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Text(
-                                              DateFormat.MMM().format(DateTime.now()),
-                                              style: const TextStyle(
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.bold,
-                                                color: Colors.white,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 4),
-                                            const Icon(
-                                              Icons.check_circle,
-                                              color: Colors.white,
-                                              size: 12,
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    IconButton(
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                      icon: Icon(Icons.info_outline, size: 20,
-                                          color: isDark ? Colors.grey.shade400 : Colors.grey.shade600),
-                                      tooltip: 'Paid Months',
-                                      onPressed: () => showPaidMonths(card),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          );
-                        }),
-                      ],
-                      if (loans.isEmpty && creditCards.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.all(32),
-                          child: Center(
-                            child: Text(
-                              'No active bills found.',
-                              style: TextStyle(color: isDark ? Colors.white38 : Colors.black38),
-                            ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
             ),
           );
         },
@@ -1588,11 +1694,21 @@ class _BillsViewState extends ConsumerState<BillsView> {
                           ],
                         ),
                         if (isExpanded && hasDetails)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 12, bottom: 4),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
+                          Column(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8, bottom: 8),
+                                child: Divider(
+                                  color: isDark ? Colors.white24 : Colors.black12,
+                                  height: 1,
+                                  thickness: 1,
+                                ),
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 4),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
                                 const Expanded(
                                   flex: 3,
                                   child: SizedBox(),
@@ -1628,8 +1744,10 @@ class _BillsViewState extends ConsumerState<BillsView> {
                               ],
                             ),
                           ),
-                      ],
-                    ),
+                        ],
+                      ),
+                    ],
+                  ),
                   ),
                 );
               },
@@ -1903,6 +2021,165 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                       ),
                                     ),
                                     const Spacer(), // pushes icons to right
+
+                                    // Info Button
+                                    InkWell(
+                                      borderRadius: BorderRadius.circular(8),
+                                      onTap: () {
+                                        final loans = bills.where((b) => b.type == 'Loan').toList();
+                                        final cards = bills.where((b) => (b.type ?? 'Credit Card') == 'Credit Card').toList();
+                                        final boundaryKey = GlobalKey();
+                                        showDialog(
+                                          context: context,
+                                          builder: (ctx) => AlertDialog(
+                                            title: Row(
+                                              children: [
+                                                Icon(Icons.insights, color: Theme.of(context).colorScheme.primary),
+                                                const SizedBox(width: 8),
+                                                const Expanded(child: Text('At a Glance', style: TextStyle(fontWeight: FontWeight.bold))),
+                                                IconButton(
+                                                  icon: const Icon(Icons.share, size: 20),
+                                                  tooltip: 'Share as Image',
+                                                  onPressed: () async {
+                                                    try {
+                                                      RenderRepaintBoundary boundary = boundaryKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+                                                      ui.Image image = await boundary.toImage(pixelRatio: 3.0);
+                                                      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+                                                      if (byteData != null) {
+                                                        final pngBytes = byteData.buffer.asUint8List();
+                                                        final directory = (await getTemporaryDirectory()).path;
+                                                        final imgFile = File('$directory/at_a_glance_report.png');
+                                                        await imgFile.writeAsBytes(pngBytes);
+                                                        await Share.shareXFiles([XFile(imgFile.path)], text: 'Vault Notes - At a Glance');
+                                                      }
+                                                    } catch (e) {
+                                                      if (context.mounted) {
+                                                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+                                                      }
+                                                    }
+                                                  },
+                                                ),
+                                              ],
+                                            ),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                            contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                                            content: SizedBox(
+                                              width: double.maxFinite,
+                                              child: SingleChildScrollView(
+                                                child: RepaintBoundary(
+                                                  key: boundaryKey,
+                                                  child: Container(
+                                                    color: Theme.of(context).dialogBackgroundColor,
+                                                    padding: const EdgeInsets.all(4.0),
+                                                    child: Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      mainAxisSize: MainAxisSize.min,
+                                                      children: [
+                                                        if (loans.isNotEmpty) ...[
+                                                          Row(
+                                                            children: [
+                                                              Icon(Icons.account_balance, color: isDark ? Colors.blue.shade300 : Colors.blue.shade700, size: 18),
+                                                              const SizedBox(width: 6),
+                                                              Text('Total Loans', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: isDark ? Colors.blue.shade300 : Colors.blue.shade700)),
+                                                            ],
+                                                          ),
+                                                          const SizedBox(height: 10),
+                                                          ...loans.map((loan) {
+                                                            final totalAmount = loan.totalLoanAmount != null ? fmt(loan.totalLoanAmount!) : 'N/A';
+                                                            final remaining = fmt(loan.amount);
+                                                            final paid = loan.paidEmis?.toString() ?? '0';
+                                                            final left = loan.totalEmis != null ? (loan.totalEmis! - (loan.paidEmis ?? 0)).toString() : 'N/A';
+                                                            return Container(
+                                                              margin: const EdgeInsets.only(bottom: 10),
+                                                              padding: const EdgeInsets.all(12),
+                                                              decoration: BoxDecoration(
+                                                                color: isDark ? Colors.blue.withOpacity(0.1) : Colors.blue.shade50,
+                                                                borderRadius: BorderRadius.circular(12),
+                                                                border: Border.all(color: isDark ? Colors.blue.withOpacity(0.2) : Colors.blue.shade200),
+                                                              ),
+                                                              child: Column(
+                                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                                children: [
+                                                                  Text(loan.title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: isDark ? Colors.white : Colors.black87)),
+                                                                  if (loan.emiAmount != null) ...[
+                                                                    const SizedBox(height: 4),
+                                                                    Text('EMI: ${fmt(loan.emiAmount!)} / month', style: TextStyle(fontSize: 12, color: isDark ? Colors.blue.shade300 : Colors.blue.shade700, fontWeight: FontWeight.bold)),
+                                                                  ],
+                                                                  const SizedBox(height: 6),
+                                                                  Row(
+                                                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                                    children: [
+                                                                      Text('Total loan: $totalAmount', style: TextStyle(fontSize: 12, color: isDark ? Colors.white70 : Colors.black87)),
+                                                                      Text('EMIs paid: $paid', style: TextStyle(fontSize: 12, color: isDark ? Colors.white70 : Colors.black87)),
+                                                                    ],
+                                                                  ),
+                                                                  const SizedBox(height: 4),
+                                                                  Row(
+                                                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                                    children: [
+                                                                      Text('Loan left: $remaining', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red)),
+                                                                      Text('EMIs left: $left', style: TextStyle(fontSize: 12, color: isDark ? Colors.white70 : Colors.black87)),
+                                                                    ],
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            );
+                                                          }).toList(),
+                                                      const SizedBox(height: 16),
+                                                    ],
+                                                    if (cards.isNotEmpty) ...[
+                                                      Row(
+                                                        children: [
+                                                          Icon(Icons.credit_card, color: isDark ? Colors.orange.shade300 : Colors.orange.shade700, size: 18),
+                                                          const SizedBox(width: 6),
+                                                          Text('Total Credit Cards', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: isDark ? Colors.orange.shade300 : Colors.orange.shade700)),
+                                                        ],
+                                                      ),
+                                                      const SizedBox(height: 10),
+                                                      ...cards.map((card) {
+                                                        return Container(
+                                                          margin: const EdgeInsets.only(bottom: 10),
+                                                          padding: const EdgeInsets.all(12),
+                                                          decoration: BoxDecoration(
+                                                            color: isDark ? Colors.orange.withOpacity(0.1) : Colors.orange.shade50,
+                                                            borderRadius: BorderRadius.circular(12),
+                                                            border: Border.all(color: isDark ? Colors.orange.withOpacity(0.2) : Colors.orange.shade200),
+                                                          ),
+                                                          child: Row(
+                                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                            children: [
+                                                              Expanded(child: Text(card.title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: isDark ? Colors.white : Colors.black87))),
+                                                              Text(fmt(card.amount), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.red)),
+                                                            ],
+                                                          ),
+                                                        );
+                                                      }).toList(),
+                                                    ],
+                                                    ], // children
+                                                  ), // Column
+                                                ), // Container
+                                              ), // RepaintBoundary
+                                            ), // SingleChildScrollView
+                                          ), // SizedBox
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(ctx),
+                                                child: const Text('Close'),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(6.0),
+                                        child: Icon(
+                                          Icons.info_outline,
+                                          size: 25,
+                                          color: Theme.of(context).colorScheme.primary,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
 
                                     // EMI Report Shortcut
                                     InkWell(
@@ -2475,6 +2752,15 @@ class _BillsViewState extends ConsumerState<BillsView> {
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
                             color: statusColor)),
+                    if (bill.type == 'Loan' && bill.interestRate != null) ...[
+                      const SizedBox(height: 3),
+                      Text('Interest Rate: ${bill.interestRate}% p.a.',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: isDark
+                                  ? Colors.orange.shade300
+                                  : Colors.orange.shade800)),
+                    ],
                     if (bill.note != null && bill.note!.isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Text('Note: ${bill.note}',

@@ -18,6 +18,19 @@ class GoogleDriveService {
   GoogleSignInAccount? get currentUser => _currentUser;
   Stream<GoogleSignInAccount?> get onCurrentUserChanged => _googleSignIn.onCurrentUserChanged;
 
+  /// Restores the previous Google Sign-In session silently on app start.
+  /// This calls [GoogleSignIn.signInSilently] which uses the cached token —
+  /// no UI is shown to the user. Returns the account if still signed in, or null.
+  Future<GoogleSignInAccount?> trySilentSignIn() async {
+    try {
+      _currentUser = await _googleSignIn.signInSilently();
+      return _currentUser;
+    } catch (e) {
+      // Silently fail — user can sign in manually if needed
+      return null;
+    }
+  }
+
   Future<GoogleSignInAccount?> signIn() async {
     try {
       _currentUser = await _googleSignIn.signIn();

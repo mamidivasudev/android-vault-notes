@@ -1811,36 +1811,29 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                 ref.read(searchQueryProvider.notifier).state = value;
               },
             )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                RichText(
-                  text: TextSpan(
-                    text: _currentIndex == 1 ? 'My Expenses' : (_currentIndex == 2 ? 'My Links' : (_currentIndex == 3 ? 'My Tables' : (_currentIndex == 4 ? 'Recycle Bin' : (_currentIndex == 5 ? 'Reminders' : (_currentIndex == 6 ? 'Secure Cards' : (_currentIndex == 7 ? 'Bills & Subscriptions' : 'My Notes')))))),
-                    style: GoogleFonts.lexend(fontSize: 18, fontWeight: FontWeight.bold, color: const Color(0xFF1D63D2)),
-                    children: [
-                      if (_currentIndex == 0) ...[
-                        TextSpan(
-                          text: '      |      Vasu ',
-                          style: GoogleFonts.lexend(fontSize: 12, fontWeight: FontWeight.w600, color: const Color(0xFF1D63D2).withOpacity(0.95)),
-                        ),
-                        WidgetSpan(
-                          alignment: PlaceholderAlignment.middle,
-                          child: const Text('❤️', style: TextStyle(fontSize: 11))
-                              .animate(onPlay: (controller) => controller.repeat(reverse: true))
-                              .scale(begin: const Offset(1, 1), end: const Offset(1.25, 1.25), duration: 600.ms, curve: Curves.easeInOut),
-                        ),
-                        TextSpan(
-                          text: ' Likki',
-                          style: GoogleFonts.lexend(fontSize: 12, fontWeight: FontWeight.w600, color: const Color(0xFF1D63D2).withOpacity(0.95)),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const _LiveClock(),
-              ],
+          : RichText(
+              text: TextSpan(
+                text: _currentIndex == 1 ? 'My Expenses' : (_currentIndex == 2 ? 'My Links' : (_currentIndex == 3 ? 'My Tables' : (_currentIndex == 4 ? 'Recycle Bin' : (_currentIndex == 5 ? 'Reminders' : (_currentIndex == 6 ? 'Secure Cards' : (_currentIndex == 7 ? 'Bills & Subscriptions' : 'My Notes')))))),
+                style: GoogleFonts.lexend(fontSize: 18, fontWeight: FontWeight.bold, color: const Color(0xFF1D63D2)),
+                children: [
+                  if (_currentIndex == 0) ...[
+                    TextSpan(
+                      text: '      |      Vasu ',
+                      style: GoogleFonts.lexend(fontSize: 12, fontWeight: FontWeight.w600, color: const Color(0xFF1D63D2).withOpacity(0.95)),
+                    ),
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.middle,
+                      child: const Text('❤️', style: TextStyle(fontSize: 11))
+                          .animate(onPlay: (controller) => controller.repeat(reverse: true))
+                          .scale(begin: const Offset(1, 1), end: const Offset(1.25, 1.25), duration: 600.ms, curve: Curves.easeInOut),
+                    ),
+                    TextSpan(
+                      text: ' Likki',
+                      style: GoogleFonts.lexend(fontSize: 12, fontWeight: FontWeight.w600, color: const Color(0xFF1D63D2).withOpacity(0.95)),
+                    ),
+                  ],
+                ],
+              ),
             ),
       actions: [
         if (_isSearching)

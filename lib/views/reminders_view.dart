@@ -631,7 +631,7 @@ class _ReminderDialogState extends ConsumerState<ReminderDialog> {
                 isDismissed: false,
                 createdAt: widget.reminder?.createdAt,
                 repeatType: _repeatType,
-                referenceDate: _selectedDateTime, // Automatically store this as reference
+                referenceDate: widget.reminder?.referenceDate ?? _selectedDateTime,
               );
               if (isEdit) {
                 ref.read(remindersProvider.notifier).updateReminder(newReminder);

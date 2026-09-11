@@ -2075,6 +2075,60 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                                       crossAxisAlignment: CrossAxisAlignment.start,
                                                       mainAxisSize: MainAxisSize.min,
                                                       children: [
+                                                        Container(
+                                                          margin: const EdgeInsets.only(bottom: 20),
+                                                          padding: const EdgeInsets.all(12),
+                                                          decoration: BoxDecoration(
+                                                            color: isDark ? Colors.purple.withOpacity(0.1) : Colors.purple.shade50,
+                                                            borderRadius: BorderRadius.circular(12),
+                                                            border: Border.all(color: isDark ? Colors.purple.withOpacity(0.2) : Colors.purple.shade200),
+                                                          ),
+                                                          child: Column(
+                                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                                            children: [
+                                                              Row(
+                                                                children: [
+                                                                  Icon(Icons.pie_chart, color: isDark ? Colors.purple.shade300 : Colors.purple.shade700, size: 18),
+                                                                  const SizedBox(width: 6),
+                                                                  Text('OVERALL SUMMARY', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: isDark ? Colors.purple.shade300 : Colors.purple.shade700)),
+                                                                ],
+                                                              ),
+                                                              const SizedBox(height: 12),
+                                                              Row(
+                                                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                                children: [
+                                                                  Text('Total Loan Amount:', style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : Colors.black87)),
+                                                                  Text(fmt(loans.fold<double>(0.0, (sum, item) => sum + (item.totalLoanAmount ?? 0.0))), style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: isDark ? Colors.white : Colors.black)),
+                                                                ],
+                                                              ),
+                                                              const SizedBox(height: 6),
+                                                              Row(
+                                                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                                children: [
+                                                                  Text('Total Loan Left:', style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : Colors.black87)),
+                                                                  Text(fmt(loans.fold<double>(0.0, (sum, item) => sum + item.amount)), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.red)),
+                                                                ],
+                                                              ),
+                                                              const SizedBox(height: 6),
+                                                              Row(
+                                                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                                children: [
+                                                                  Text('Total EMI / Month:', style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : Colors.black87)),
+                                                                  Text(fmt(loans.fold<double>(0.0, (sum, item) => sum + (item.emiAmount ?? 0.0))), style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: isDark ? Colors.blue.shade300 : Colors.blue.shade700)),
+                                                                ],
+                                                              ),
+                                                              const SizedBox(height: 6),
+                                                              const Divider(height: 12),
+                                                              Row(
+                                                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                                children: [
+                                                                  Text('Total Credit Cards Due:', style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : Colors.black87)),
+                                                                  Text(fmt(cards.fold<double>(0.0, (sum, item) => sum + item.amount)), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.red)),
+                                                                ],
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
                                                         if (loans.isNotEmpty) ...[
                                                           Row(
                                                             children: [

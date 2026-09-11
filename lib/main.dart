@@ -76,6 +76,26 @@ class MainScreen extends ConsumerStatefulWidget {
   ConsumerState<MainScreen> createState() => _MainScreenState();
 }
 
+class AppTab {
+  final String id;
+  final String label;
+  final IconData icon;
+  final IconData selectedIcon;
+  final int stateIndex;
+
+  const AppTab(this.id, this.label, this.icon, this.selectedIcon, this.stateIndex);
+}
+
+const allTabs = [
+  AppTab('notes', 'Notes', Icons.notes_outlined, Icons.notes, 0),
+  AppTab('expenses', 'Expenses', Icons.wallet_outlined, Icons.wallet, 1),
+  AppTab('links', 'Links', Icons.link_outlined, Icons.link, 2),
+  AppTab('tables', 'Tables', Icons.table_chart_outlined, Icons.table_chart, 3),
+  AppTab('bills', 'Bills', Icons.receipt_long_outlined, Icons.receipt_long, 7),
+  AppTab('docs', 'Docs', Icons.folder_outlined, Icons.folder, 8),
+  AppTab('mileage', 'Mileage', Icons.two_wheeler_outlined, Icons.two_wheeler, 9),
+];
+
 class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStateMixin {
   int _currentIndex = 0;
   late PageController _pageController;
@@ -469,43 +489,40 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
         body: _buildBody(),
         bottomNavigationBar: (isSelectionMode || isEditingTable || (_currentIndex > 3 && _currentIndex != 7 && _currentIndex != 8 && _currentIndex != 9))
             ? null 
-            : NavigationBarTheme(
-                data: NavigationBarThemeData(
-                  labelTextStyle: WidgetStateProperty.all(
-                    const TextStyle(fontSize: 11),
-                  ),
-                ),
-                child: NavigationBar(
-                selectedIndex: _currentIndex == 7 ? 4 : (_currentIndex == 8 ? 5 : (_currentIndex == 9 ? 6 : _currentIndex)),
-                onDestinationSelected: (index) {
-                  setState(() {
-                    if (index == 4) {
-                      _currentIndex = 7;
-                    } else if (index == 5) {
-                      _currentIndex = 8;
-                    } else if (index == 6) {
-                      _currentIndex = 9;
-                    } else {
-                      _currentIndex = index;
-                    }
-                    _isSearching = false;
-                    _searchController.clear();
-                    ref.read(searchQueryProvider.notifier).state = '';
-                    // Auto-lock any revealed card when leaving Cards tab
-                    ref.read(revealedCardIdProvider.notifier).setRevealed(null);
-                  });
+            : Builder(
+                builder: (context) {
+                  final enabledTabIds = ref.watch(enabledTabsProvider);
+                  final visibleTabs = allTabs.where((t) => enabledTabIds.contains(t.id)).toList();
+                  if (visibleTabs.isEmpty) return const SizedBox.shrink();
+                  
+                  int navIndex = visibleTabs.indexWhere((t) => t.stateIndex == _currentIndex);
+                  if (navIndex == -1) navIndex = 0; // Fallback if somehow invalid
+                  
+                  return NavigationBarTheme(
+                    data: NavigationBarThemeData(
+                      labelTextStyle: WidgetStateProperty.all(
+                        const TextStyle(fontSize: 11),
+                      ),
+                    ),
+                    child: NavigationBar(
+                      selectedIndex: navIndex,
+                      onDestinationSelected: (index) {
+                        setState(() {
+                          _currentIndex = visibleTabs[index].stateIndex;
+                          _isSearching = false;
+                          _searchController.clear();
+                          ref.read(searchQueryProvider.notifier).state = '';
+                          // Auto-lock any revealed card when leaving Cards tab
+                          ref.read(revealedCardIdProvider.notifier).setRevealed(null);
+                        });
+                      },
+                      destinations: visibleTabs.map((t) => 
+                        NavigationDestination(icon: Icon(t.icon), selectedIcon: Icon(t.selectedIcon), label: t.label)
+                      ).toList(),
+                    ),
+                  );
                 },
-                destinations: const [
-                  NavigationDestination(icon: Icon(Icons.notes_outlined), selectedIcon: Icon(Icons.notes), label: 'Notes'),
-                  NavigationDestination(icon: Icon(Icons.wallet_outlined), selectedIcon: Icon(Icons.wallet), label: 'Expenses'),
-                  NavigationDestination(icon: Icon(Icons.link_outlined), selectedIcon: Icon(Icons.link), label: 'Links'),
-                  NavigationDestination(icon: Icon(Icons.table_chart_outlined), selectedIcon: Icon(Icons.table_chart), label: 'Tables'),
-                  NavigationDestination(icon: Icon(Icons.receipt_long_outlined), selectedIcon: Icon(Icons.receipt_long), label: 'Bills'),
-                  NavigationDestination(icon: Icon(Icons.folder_outlined), selectedIcon: Icon(Icons.folder), label: 'Docs'),
-                  NavigationDestination(icon: Icon(Icons.two_wheeler_outlined), selectedIcon: Icon(Icons.two_wheeler), label: 'Mileage'),
-                ],
               ),
-            ),
         floatingActionButton: isSelectionMode || isEditingTable || _currentIndex == 4 || _currentIndex == 8 || _currentIndex == 9
             ? null 
             : FloatingActionButton(
@@ -1274,6 +1291,16 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                 ListTile(
                   dense: true,
                   visualDensity: const VisualDensity(horizontal: 0, vertical: -4),
+                  leading: const Icon(Icons.view_carousel_outlined, color: Color(0xFF6366F1), size: 22),
+                  title: const Text('Customize Tabs', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showCustomizeTabsDialog(context, ref);
+                  },
+                ),
+                ListTile(
+                  dense: true,
+                  visualDensity: const VisualDensity(horizontal: 0, vertical: -4),
                   leading: const Icon(Icons.folder_outlined, color: Color(0xFFF59E0B), size: 22),
                   title: const Text('Pick Folder', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                   onTap: () {
@@ -1542,6 +1569,55 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
       },
       contentPadding: const EdgeInsets.symmetric(horizontal: 16),
       dense: true,
+    );
+  }
+  void _showCustomizeTabsDialog(BuildContext context, WidgetRef ref) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Customize Tabs'),
+          content: Consumer(
+            builder: (context, innerRef, child) {
+              final enabledTabIds = innerRef.watch(enabledTabsProvider);
+              final isDark = innerRef.watch(themeModeProvider) == ThemeMode.dark;
+              return SizedBox(
+                width: double.maxFinite,
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: allTabs.length,
+                  itemBuilder: (context, index) {
+                    final tab = allTabs[index];
+                    final isEnabled = enabledTabIds.contains(tab.id);
+                    return SwitchListTile(
+                      title: Text(tab.label),
+                      secondary: Icon(tab.icon, color: isDark ? Colors.blue.shade300 : Colors.blue.shade700),
+                      value: isEnabled,
+                      activeColor: Colors.blue,
+                      onChanged: (val) {
+                        innerRef.read(enabledTabsProvider.notifier).toggleTab(tab.id, val);
+                        if (!val && _currentIndex == tab.stateIndex) {
+                          // If they disabled the currently active tab, route them to Notes (0) or the first available
+                          final newVisible = allTabs.where((t) => innerRef.read(enabledTabsProvider).contains(t.id)).toList();
+                          setState(() {
+                            _currentIndex = newVisible.isNotEmpty ? newVisible.first.stateIndex : 0;
+                          });
+                        }
+                      },
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Done'),
+            ),
+          ],
+        );
+      },
     );
   }
 

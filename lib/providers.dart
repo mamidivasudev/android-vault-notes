@@ -289,6 +289,41 @@ class BiometricLockNotifier extends Notifier<bool> {
   }
 }
 
+class EnabledTabsNotifier extends Notifier<List<String>> {
+  static const _key = 'enabled_tabs';
+
+  @override
+  List<String> build() {
+    _load();
+    // Default all tabs enabled
+    return ['notes', 'expenses', 'links', 'tables', 'bills', 'docs', 'mileage'];
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList(_key);
+    if (saved != null) {
+      state = saved;
+    }
+  }
+
+  Future<void> toggleTab(String tabId, bool isEnabled) async {
+    List<String> newState = List.from(state);
+    if (isEnabled && !newState.contains(tabId)) {
+      newState.add(tabId);
+    } else if (!isEnabled && newState.contains(tabId)) {
+      newState.remove(tabId);
+    }
+    // Keep order
+    final ordered = ['notes', 'expenses', 'links', 'tables', 'bills', 'docs', 'mileage'].where((t) => newState.contains(t)).toList();
+    state = ordered;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_key, ordered);
+  }
+}
+
+final enabledTabsProvider = NotifierProvider<EnabledTabsNotifier, List<String>>(EnabledTabsNotifier.new);
+
 final biometricLockEnabledProvider = NotifierProvider<BiometricLockNotifier, bool>(BiometricLockNotifier.new);
 
 class SecurityLockEnabledNotifier extends Notifier<bool> {

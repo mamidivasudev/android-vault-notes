@@ -208,17 +208,7 @@ class _RemindersViewState extends ConsumerState<RemindersView> {
                         decoration: isActive ? null : TextDecoration.lineThrough,
                       ),
                     ),
-                    if (reminder.description.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        reminder.description,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: isDark ? Colors.white70 : Colors.black54,
-                          decoration: isActive ? null : TextDecoration.lineThrough,
-                        ),
-                      ),
-                    ],
+
                     if (reminder.referenceDate != null) ...[
                       const SizedBox(height: 4),
                       Row(
@@ -297,6 +287,30 @@ class _RemindersViewState extends ConsumerState<RemindersView> {
                         constraints: const BoxConstraints(),
                         padding: const EdgeInsets.all(4.0),
                         tooltip: 'Snooze',
+                      ),
+                      const SizedBox(height: 4),
+                    ],
+                    if (reminder.description.isNotEmpty) ...[
+                      IconButton(
+                        icon: const Icon(Icons.info_outline, size: 20, color: Color(0xFF1D63D2)),
+                        constraints: const BoxConstraints(),
+                        padding: const EdgeInsets.all(4.0),
+                        tooltip: 'Show Description',
+                        onPressed: () {
+                          showDialog(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Description'),
+                              content: Text(reminder.description),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: const Text('Close'),
+                                )
+                              ],
+                            ),
+                          );
+                        },
                       ),
                       const SizedBox(height: 4),
                     ],

@@ -99,12 +99,6 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
           onFavoriteToggle: () {
             ref.read(showFavoritesOnlyProvider.notifier).state = !ref.read(showFavoritesOnlyProvider);
           },
-          showGroupByDateToggle: true,
-          groupByDateEnabled: ref.watch(showGroupedExpensesProvider),
-          onGroupByDateToggle: () {
-            ref.read(showGroupedExpensesProvider.notifier).state =
-                !ref.read(showGroupedExpensesProvider);
-          },
           itemCount: allExpenses.where((e) {
             final matchCat = currentSelectedCat == 'All' || e.category == currentSelectedCat;
             final matchFav = !ref.watch(showFavoritesOnlyProvider) || e.isFavorite;
@@ -112,6 +106,37 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
             if (query.isEmpty) return matchCat && matchFav;
             return matchCat && matchFav && (e.title.toLowerCase().contains(query) || e.amount.toString().contains(query));
           }).length,
+          trailingActions: [
+            PopupMenuButton<String>(
+              icon: Icon(Icons.more_vert, size: 20, color: Theme.of(context).colorScheme.primary),
+              padding: EdgeInsets.zero,
+              tooltip: 'Options',
+              onSelected: (val) {
+                final filtered = currentSelectedCat == 'All'
+                    ? allExpenses
+                    : allExpenses.where((e) => e.category == currentSelectedCat).toList();
+                
+                if (val == 'csv') {
+                  exportExpensesToCSV(context, filtered, currentSelectedCat);
+                } else if (val == 'txt') {
+                  exportExpensesToTXT(context, filtered, currentSelectedCat);
+                } else if (val == 'breakdown') {
+                  setState(() => _showBreakdown = !_showBreakdown);
+                } else if (val == 'sort') {
+                  _showSortOptions(context, ref);
+                } else if (val == 'group') {
+                  ref.read(showGroupedExpensesProvider.notifier).state = !ref.read(showGroupedExpensesProvider);
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(value: 'csv', child: Text('Export CSV', style: TextStyle(fontSize: 13))),
+                const PopupMenuItem(value: 'txt', child: Text('Export TXT', style: TextStyle(fontSize: 13))),
+                PopupMenuItem(value: 'breakdown', child: Text(_showBreakdown ? 'Hide Breakdown' : 'Show Breakdown', style: const TextStyle(fontSize: 13))),
+                const PopupMenuItem(value: 'sort', child: Text('Sort', style: TextStyle(fontSize: 13))),
+                PopupMenuItem(value: 'group', child: Text(ref.watch(showGroupedExpensesProvider) ? 'Show Flat List' : 'Group by Date', style: const TextStyle(fontSize: 13))),
+              ],
+            ),
+          ],
         ),
         _buildSummaryBar(categoryExpenses, currentSelectedCat),
         if (_showBreakdown)
@@ -229,126 +254,6 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
                 backgroundColor: budgetTrackColor,
                 valueColor: AlwaysStoppedAnimation<Color>(budgetColor),
                 minHeight: 8,
-              ),
-            ),
-          ],
-          if (expense > 0) ...[
-            const SizedBox(height: 12),
-            Divider(height: 1, color: dividerColor),
-            const SizedBox(height: 8),
-            Center(
-              child: SizedBox(
-                width: 280,
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () {
-                              final filtered = selectedCat == 'All'
-                                  ? ref.read(expensesProvider)
-                                  : ref.read(expensesProvider)
-                                      .where((e) => e.category == selectedCat)
-                                      .toList();
-                              exportExpensesToCSV(context, filtered, selectedCat);
-                            },
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.upload_rounded, size: 16, color: Color(0xFF1D63D2)),
-                                SizedBox(width: 4),
-                                Text(
-                                  'Export CSV',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF1D63D2),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () {
-                              final filtered = selectedCat == 'All'
-                                  ? ref.read(expensesProvider)
-                                  : ref.read(expensesProvider)
-                                      .where((e) => e.category == selectedCat)
-                                      .toList();
-                              exportExpensesToTXT(context, filtered, selectedCat);
-                            },
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.description_outlined, size: 16, color: Color(0xFF10B981)),
-                                SizedBox(width: 4),
-                                Text(
-                                  'Export TXT',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF10B981),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () => setState(() => _showBreakdown = !_showBreakdown),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  _showBreakdown ? Icons.keyboard_arrow_up : Icons.bar_chart,
-                                  size: 16,
-                                  color: const Color(0xFF6366F1),
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  _showBreakdown ? 'Hide Breakdown' : 'Show Breakdown',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF6366F1),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () => _showSortOptions(context, ref),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                SizedBox(width: 20), // Placeholder to match icon (16) + spacing (4) of Export TXT
-                                Text(
-                                  'Sort',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF8B5CF6),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
               ),
             ),
           ],

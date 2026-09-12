@@ -2097,14 +2097,6 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                                               Row(
                                                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                                                 children: [
-                                                                  Text('Total Loan Amount:', style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : Colors.black87)),
-                                                                  Text(fmt(loans.fold<double>(0.0, (sum, item) => sum + (item.totalLoanAmount ?? 0.0))), style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: isDark ? Colors.white : Colors.black)),
-                                                                ],
-                                                              ),
-                                                              const SizedBox(height: 6),
-                                                              Row(
-                                                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                                                children: [
                                                                   Text('Total Loan Left:', style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : Colors.black87)),
                                                                   Text(fmt(loans.fold<double>(0.0, (sum, item) => sum + item.amount)), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.red)),
                                                                 ],
@@ -2113,8 +2105,8 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                                               Row(
                                                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                                                 children: [
-                                                                  Text('Total EMI / Month:', style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : Colors.black87)),
-                                                                  Text(fmt(loans.fold<double>(0.0, (sum, item) => sum + (item.emiAmount ?? 0.0))), style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: isDark ? Colors.blue.shade300 : Colors.blue.shade700)),
+                                                                  Text('Total Credit Cards Due:', style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : Colors.black87)),
+                                                                  Text(fmt(cards.fold<double>(0.0, (sum, item) => sum + item.amount)), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.red)),
                                                                 ],
                                                               ),
                                                               const SizedBox(height: 6),
@@ -2122,8 +2114,17 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                                               Row(
                                                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                                                 children: [
-                                                                  Text('Total Credit Cards Due:', style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : Colors.black87)),
-                                                                  Text(fmt(cards.fold<double>(0.0, (sum, item) => sum + item.amount)), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.red)),
+                                                                  Text('Total amount:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: isDark ? Colors.white : Colors.black87)),
+                                                                  Text(fmt(loans.fold<double>(0.0, (sum, item) => sum + item.amount) + cards.fold<double>(0.0, (sum, item) => sum + item.amount)), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.red)),
+                                                                ],
+                                                              ),
+                                                              const SizedBox(height: 6),
+                                                              const Divider(height: 12),
+                                                              Row(
+                                                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                                children: [
+                                                                  Text('Total EMI / Month:', style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : Colors.black87)),
+                                                                  Text(fmt(loans.fold<double>(0.0, (sum, item) => sum + (item.emiAmount ?? 0.0))), style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: isDark ? Colors.blue.shade300 : Colors.blue.shade700)),
                                                                 ],
                                                               ),
                                                             ],

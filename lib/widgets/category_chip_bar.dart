@@ -18,6 +18,7 @@ class CategoryChipBar extends StatelessWidget {
   final VoidCallback? onGroupByDateToggle;
   final bool showPreviewsEnabled;
   final VoidCallback? onPreviewsToggle;
+  final List<Widget>? trailingActions;
 
   const CategoryChipBar({
     super.key,
@@ -36,6 +37,7 @@ class CategoryChipBar extends StatelessWidget {
     this.onGroupByDateToggle,
     this.showPreviewsEnabled = false,
     this.onPreviewsToggle,
+    this.trailingActions,
   });
 
   void _showAllCategories(BuildContext context) {
@@ -260,6 +262,7 @@ class CategoryChipBar extends StatelessWidget {
               tooltip: 'Manage Categories',
               splashRadius: 24,
             ),
+            if (trailingActions != null) ...trailingActions!,
             const SizedBox(width: 8),
           ],
         ),

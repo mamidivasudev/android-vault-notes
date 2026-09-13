@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'models.dart';
 import 'vault_service.dart';
 import 'services/google_drive_service.dart';
@@ -296,7 +297,7 @@ class EnabledTabsNotifier extends Notifier<List<String>> {
   List<String> build() {
     _load();
     // Default all tabs enabled
-    return ['notes', 'expenses', 'links', 'tables', 'bills', 'docs', 'mileage'];
+    return ['notes', 'expenses', 'links', 'tables', 'bills', 'docs', 'mileage', 'grocery'];
   }
 
   Future<void> _load() async {
@@ -315,7 +316,7 @@ class EnabledTabsNotifier extends Notifier<List<String>> {
       newState.remove(tabId);
     }
     // Keep order
-    final ordered = ['notes', 'expenses', 'links', 'tables', 'bills', 'docs', 'mileage'].where((t) => newState.contains(t)).toList();
+    final ordered = ['notes', 'expenses', 'links', 'tables', 'bills', 'docs', 'mileage', 'grocery'].where((t) => newState.contains(t)).toList();
     state = ordered;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_key, ordered);
@@ -2007,3 +2008,120 @@ class FuelEntriesNotifier extends Notifier<List<FuelEntry>> {
 }
 
 final fuelEntriesProvider = NotifierProvider<FuelEntriesNotifier, List<FuelEntry>>(FuelEntriesNotifier.new);
+
+
+class GroceryNotifier extends Notifier<List<GroceryItem>> {
+  @override
+  List<GroceryItem> build() {
+    _loadItems();
+    return [];
+  }
+
+  void _loadItems() async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = prefs.getStringList('grocery_items') ?? [];
+    state = data.map((e) => GroceryItem.fromJson(jsonDecode(e))).toList();
+  }
+
+  void _saveItems() async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = state.map((e) => jsonEncode(e.toJson())).toList();
+    prefs.setStringList('grocery_items', data);
+  }
+
+  void addItem(String name) {
+    if (name.trim().isEmpty) return;
+    state = [...state, GroceryItem(name: name.trim())];
+    _saveItems();
+  }
+
+  void toggleItem(String id) {
+    state = [
+      for (final item in state)
+        if (item.id == id) item.copyWith(isPurchased: !item.isPurchased) else item
+    ];
+    _saveItems();
+  }
+
+  void editItem(String id, String newName) {
+    state = [
+      for (final item in state)
+        if (item.id == id) item.copyWith(name: newName) else item
+    ];
+    _saveItems();
+  }
+
+  void deleteItem(String id) {
+    state = state.where((item) => item.id != id).toList();
+    _saveItems();
+  }
+
+  void clearPurchased() {
+    state = state.where((item) => !item.isPurchased).toList();
+    _saveItems();
+  }
+
+  void clearToBuy() {
+    state = state.where((item) => item.isPurchased).toList();
+    _saveItems();
+  }
+
+  void clearAll() {
+    state = [];
+    _saveItems();
+  }
+
+  void deleteMultiple(Set<String> ids) {
+    state = state.where((item) => !ids.contains(item.id)).toList();
+    _saveItems();
+  }
+}
+
+final groceryProvider = NotifierProvider<GroceryNotifier, List<GroceryItem>>(() {
+  return GroceryNotifier();
+});
+
+
+// Grocery Master Catalog Provider
+class GroceryMasterCatalogNotifier extends AsyncNotifier<List<dynamic>> {
+  @override
+  Future<List<dynamic>> build() async {
+    List<dynamic> baseItems = [];
+    try {
+      final String response = await rootBundle.loadString('assets/indian_grocery_master_v2_multilingual_search.json');
+      final data = json.decode(response);
+      baseItems = List<dynamic>.from(data['items']);
+    } catch (e) {
+      print('Error loading catalog: $e');
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final userItemsStr = prefs.getString('user_grocery_catalog');
+    if (userItemsStr != null) {
+      List<dynamic> decoded = json.decode(userItemsStr);
+      baseItems.addAll(decoded);
+    }
+    return baseItems;
+  }
+
+  Future<void> addCustomItem(String englishName, String localName, String searchKeywords) async {
+    final prefs = await SharedPreferences.getInstance();
+    final userItemsStr = prefs.getString('user_grocery_catalog');
+    List<dynamic> userItems = [];
+    if (userItemsStr != null) {
+      userItems = List<dynamic>.from(json.decode(userItemsStr));
+    }
+
+    final newItem = {
+      "id": "U${DateTime.now().millisecondsSinceEpoch}",
+      "names": { "en": englishName, "local": localName },
+      "search_terms": { "en": searchKeywords.split(',').map((e) => e.trim()).toList() }
+    };
+
+    userItems.add(newItem);
+    await prefs.setString('user_grocery_catalog', json.encode(userItems));
+    ref.invalidateSelf();
+  }
+}
+
+final groceryCatalogProvider = AsyncNotifierProvider<GroceryMasterCatalogNotifier, List<dynamic>>(GroceryMasterCatalogNotifier.new);

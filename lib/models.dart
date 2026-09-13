@@ -707,3 +707,45 @@ class FuelEntry {
         airFilled: json['airFilled'] as bool? ?? false,
       );
 }
+
+
+class GroceryItem {
+  final String id;
+  final String name;
+  final bool isPurchased;
+  final DateTime createdAt;
+
+  GroceryItem({
+    String? id,
+    required this.name,
+    this.isPurchased = false,
+    DateTime? createdAt,
+  })  : id = id ?? const Uuid().v4(),
+        createdAt = createdAt ?? DateTime.now();
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'isPurchased': isPurchased,
+        'createdAt': createdAt.toIso8601String(),
+      };
+
+  factory GroceryItem.fromJson(Map<String, dynamic> json) => GroceryItem(
+        id: json['id'],
+        name: json['name'],
+        isPurchased: json['isPurchased'] ?? false,
+        createdAt: DateTime.parse(json['createdAt']),
+      );
+
+  GroceryItem copyWith({
+    String? name,
+    bool? isPurchased,
+  }) {
+    return GroceryItem(
+      id: id,
+      name: name ?? this.name,
+      isPurchased: isPurchased ?? this.isPurchased,
+      createdAt: createdAt,
+    );
+  }
+}

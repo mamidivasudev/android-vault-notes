@@ -22,6 +22,7 @@ import 'views/note_editor.dart';
 import 'views/reminders_view.dart';
 import 'views/bills_view.dart';
 import 'views/mileage_view.dart';
+import 'views/grocery_view.dart';
 import 'main_helpers.dart';
 import 'dialogs/link_dialog.dart';
 import 'dialogs/expense_dialog.dart';
@@ -94,6 +95,7 @@ const allTabs = [
   AppTab('bills', 'Bills', Icons.receipt_long_outlined, Icons.receipt_long, 7),
   AppTab('docs', 'Docs', Icons.folder_outlined, Icons.folder, 8),
   AppTab('mileage', 'Mileage', Icons.two_wheeler_outlined, Icons.two_wheeler, 9),
+  AppTab('grocery', 'Grocery', Icons.shopping_cart_outlined, Icons.shopping_cart, 10),
 ];
 
 class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStateMixin {
@@ -487,7 +489,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
         drawer: isEditingTable ? null : _buildDrawer(vaultPath),
         appBar: (isEditingTable || _currentIndex == 8 || _currentIndex == 9) ? null : _buildAppBar(isSelectionMode, selectedNotes.length, selectedExpenses.length, vaultPath),
         body: _buildBody(),
-        bottomNavigationBar: (isSelectionMode || isEditingTable || (_currentIndex > 3 && _currentIndex != 7 && _currentIndex != 8 && _currentIndex != 9))
+        bottomNavigationBar: (isSelectionMode || isEditingTable || (_currentIndex > 3 && _currentIndex != 7 && _currentIndex != 8 && _currentIndex != 9 && _currentIndex != 10))
             ? null 
             : Builder(
                 builder: (context) {
@@ -523,7 +525,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                   );
                 },
               ),
-        floatingActionButton: isSelectionMode || isEditingTable || _currentIndex == 4 || _currentIndex == 8 || _currentIndex == 9
+        floatingActionButton: isSelectionMode || isEditingTable || _currentIndex == 4 || _currentIndex == 8 || _currentIndex == 9 || _currentIndex == 10
             ? null 
             : FloatingActionButton(
                 onPressed: _handleFabPress,
@@ -2085,6 +2087,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     if (_currentIndex == 7) return const BillsView();
     if (_currentIndex == 8) return const DocsHomeScreen();
     if (_currentIndex == 9) return const MileageView();
+    if (_currentIndex == 10) return const GroceryView();
     return IndexedStack(index: _currentIndex, children: const [NotesView(), ExpensesView(), LinksView(), TablesView()]);
   }
 

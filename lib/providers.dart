@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'models.dart';
 import 'profiles/providers/profile_provider.dart' show profilesProvider;
+import 'utils/grocery_catalog.dart';
 import 'vault_service.dart';
 import 'services/google_drive_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -1855,6 +1856,7 @@ class SyncNotifier extends Notifier<SyncStatus> {
       ref.invalidate(deletedExpensesProvider);
       ref.invalidate(deletedLinksProvider);
       ref.invalidate(groceryProvider);
+      ref.invalidate(groceryHistoryProvider);
       ref.invalidate(groceryCatalogProvider);
       ref.invalidate(enabledTabsProvider);
       ref.invalidate(profilesProvider); // profiles_data.json was replaced too
@@ -2366,14 +2368,19 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
     final prefs = await SharedPreferences.getInstance();
     final data = prefs.getStringList('grocery_items') ?? [];
     final items = <GroceryItem>[];
+    var migrated = false;
     for (final raw in data) {
       try {
-        items.add(GroceryItem.fromJson(jsonDecode(raw)));
+        final map = Map<String, dynamic>.from(jsonDecode(raw));
+        if (!map.containsKey('quantity')) migrated = true;
+        items.add(GroceryItem.fromJson(map));
       } catch (e) {
         print('Skipping unreadable grocery item: $e');
       }
     }
     state = items;
+    // Old "Rice (2 kg)" names were split into fields; store the new format once.
+    if (migrated) await _saveItems();
   }
 
   Future<void> _saveItems() async {
@@ -2387,31 +2394,70 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
 
   static String _key(String name) => name.trim().toLowerCase();
 
-  /// Adds [name]. If it is already on the list it is not duplicated: an item
-  /// already bought is moved back to "to buy". Returns what happened.
-  Future<GroceryAddResult> addItem(String name) async {
+  /// Adds an item. If it is already on the list it is not duplicated: an item
+  /// already bought is moved back to "to buy" (with the new quantity, if given).
+  Future<GroceryAddResult> addItem(
+    String name, {
+    String quantity = '',
+    String unit = '',
+    String category = '',
+    String localName = '',
+  }) async {
     await _initFuture;
     final trimmed = name.trim();
     if (trimmed.isEmpty) return GroceryAddResult.ignored;
     final existing = state.where((i) => _key(i.name) == _key(trimmed)).firstOrNull;
     if (existing != null) {
       if (!existing.isPurchased) return GroceryAddResult.alreadyOnList;
-      state = [for (final i in state) if (i.id == existing.id) i.copyWith(isPurchased: false) else i];
+      state = [
+        for (final i in state)
+          if (i.id == existing.id)
+            i.copyWith(
+              isPurchased: false,
+              purchasedAt: null,
+              quantity: quantity.isNotEmpty ? quantity : null,
+              unit: unit.isNotEmpty ? unit : null,
+            )
+          else
+            i
+      ];
       await _saveItems();
       return GroceryAddResult.movedBack;
     }
-    state = [...state, GroceryItem(name: trimmed)];
+    state = [
+      ...state,
+      GroceryItem(name: trimmed, quantity: quantity, unit: unit, category: category, localName: localName),
+    ];
     await _saveItems();
     return GroceryAddResult.added;
   }
 
+  Future<void> updateItem(GroceryItem updated) async {
+    await _initFuture;
+    state = [for (final i in state) if (i.id == updated.id) updated else i];
+    await _saveItems();
+  }
+
   Future<void> toggleItem(String id) async {
     await _initFuture;
+    GroceryItem? bought;
     state = [
       for (final item in state)
-        if (item.id == id) item.copyWith(isPurchased: !item.isPurchased) else item
+        if (item.id == id)
+          () {
+            final next = item.copyWith(
+              isPurchased: !item.isPurchased,
+              purchasedAt: item.isPurchased ? null : DateTime.now(),
+            );
+            if (next.isPurchased) bought = next;
+            return next;
+          }()
+        else
+          item
     ];
     await _saveItems();
+    final b = bought;
+    if (b != null) await ref.read(groceryHistoryProvider.notifier).record(b);
   }
 
   Future<void> editItem(String id, String newName) async {
@@ -2433,6 +2479,13 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
   Future<void> clearPurchased() async {
     await _initFuture;
     state = state.where((item) => !item.isPurchased).toList();
+    await _saveItems();
+  }
+
+  /// "Shop again": every bought item goes back to the to-buy list.
+  Future<void> uncheckAll() async {
+    await _initFuture;
+    state = [for (final i in state) i.isPurchased ? i.copyWith(isPurchased: false, purchasedAt: null) : i];
     await _saveItems();
   }
 
@@ -2467,10 +2520,113 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
 
 enum GroceryAddResult { added, alreadyOnList, movedBack, ignored }
 
-final groceryProvider = NotifierProvider<GroceryNotifier, List<GroceryItem>>(() {
-  return GroceryNotifier();
-});
+final groceryProvider = NotifierProvider<GroceryNotifier, List<GroceryItem>>(GroceryNotifier.new);
 
+/// What has been bought before, for the "Buy again" suggestions.
+class GroceryHistoryEntry {
+  final String name;
+  final String quantity;
+  final String unit;
+  final String category;
+  final String localName;
+  final int count;
+  final DateTime lastBought;
+
+  const GroceryHistoryEntry({
+    required this.name,
+    required this.quantity,
+    required this.unit,
+    required this.category,
+    required this.localName,
+    required this.count,
+    required this.lastBought,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'quantity': quantity,
+        'unit': unit,
+        'category': category,
+        'localName': localName,
+        'count': count,
+        'lastBought': lastBought.toIso8601String(),
+      };
+
+  factory GroceryHistoryEntry.fromJson(Map<String, dynamic> j) => GroceryHistoryEntry(
+        name: j['name']?.toString() ?? '',
+        quantity: j['quantity']?.toString() ?? '',
+        unit: j['unit']?.toString() ?? '',
+        category: j['category']?.toString() ?? '',
+        localName: j['localName']?.toString() ?? '',
+        count: (j['count'] as num?)?.toInt() ?? 1,
+        lastBought: DateTime.tryParse(j['lastBought']?.toString() ?? '') ?? DateTime.now(),
+      );
+}
+
+class GroceryHistoryNotifier extends Notifier<List<GroceryHistoryEntry>> {
+  static const _prefsKey = 'grocery_history';
+  static const _maxEntries = 200;
+
+  @override
+  List<GroceryHistoryEntry> build() {
+    _load();
+    return [];
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_prefsKey);
+    if (raw == null) return;
+    try {
+      state = (jsonDecode(raw) as List).map((e) => GroceryHistoryEntry.fromJson(Map<String, dynamic>.from(e))).toList();
+    } catch (e) {
+      print('Unreadable grocery history: $e');
+    }
+  }
+
+  Future<void> _persist() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsKey, jsonEncode(state.map((h) => h.toJson()).toList()));
+    await ref.read(vaultServiceProvider).exportAppSettings();
+  }
+
+  Future<void> record(GroceryItem item) async {
+    final key = item.name.trim().toLowerCase();
+    final old = state.where((h) => h.name.toLowerCase() == key).firstOrNull;
+    final entry = GroceryHistoryEntry(
+      name: item.name.trim(),
+      quantity: item.quantity,
+      unit: item.unit,
+      category: item.category,
+      localName: item.localName,
+      count: (old?.count ?? 0) + 1,
+      lastBought: DateTime.now(),
+    );
+    final next = [entry, ...state.where((h) => h.name.toLowerCase() != key)];
+    if (next.length > _maxEntries) next.removeRange(_maxEntries, next.length);
+    state = next;
+    await _persist();
+  }
+
+  Future<void> forget(String name) async {
+    final key = name.trim().toLowerCase();
+    state = state.where((h) => h.name.toLowerCase() != key).toList();
+    await _persist();
+  }
+}
+
+final groceryHistoryProvider = NotifierProvider<GroceryHistoryNotifier, List<GroceryHistoryEntry>>(GroceryHistoryNotifier.new);
+
+/// "Buy again": most often / most recently bought items not already on the to-buy list.
+final groceryBuyAgainProvider = Provider<List<GroceryHistoryEntry>>((ref) {
+  final history = ref.watch(groceryHistoryProvider);
+  final toBuy = ref.watch(groceryProvider).where((i) => !i.isPurchased).map((i) => i.name.toLowerCase()).toSet();
+  final candidates = history.where((h) => !toBuy.contains(h.name.toLowerCase())).toList();
+  final now = DateTime.now();
+  double score(GroceryHistoryEntry h) => h.count - now.difference(h.lastBought).inDays / 30.0;
+  candidates.sort((a, b) => score(b).compareTo(score(a)));
+  return candidates.take(15).toList();
+});
 
 // Grocery Master Catalog Provider
 class GroceryMasterCatalogNotifier extends AsyncNotifier<List<dynamic>> {
@@ -2494,7 +2650,8 @@ class GroceryMasterCatalogNotifier extends AsyncNotifier<List<dynamic>> {
     return baseItems;
   }
 
-  Future<void> addCustomItem(String englishName, String localName, String searchKeywords) async {
+  Future<void> addCustomItem(String englishName, String localName, String searchKeywords,
+      {String category = 'Other', String unit = ''}) async {
     final prefs = await SharedPreferences.getInstance();
     final userItemsStr = prefs.getString('user_grocery_catalog');
     List<dynamic> userItems = [];
@@ -2505,7 +2662,10 @@ class GroceryMasterCatalogNotifier extends AsyncNotifier<List<dynamic>> {
     final newItem = {
       "id": "U${DateTime.now().millisecondsSinceEpoch}",
       "names": { "en": englishName, "local": localName },
-      "search_terms": { "en": searchKeywords.split(',').map((e) => e.trim()).toList() }
+      "search_terms": { "en": searchKeywords.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList() },
+      "category": category,
+      if (unit.isNotEmpty) "default_unit": unit,
+      if (unit.isNotEmpty) "common_units": [unit],
     };
 
     userItems.add(newItem);
@@ -2515,6 +2675,21 @@ class GroceryMasterCatalogNotifier extends AsyncNotifier<List<dynamic>> {
 }
 
 final groceryCatalogProvider = AsyncNotifierProvider<GroceryMasterCatalogNotifier, List<dynamic>>(GroceryMasterCatalogNotifier.new);
+
+/// The catalog as typed entries (empty while it is still loading).
+final groceryCatalogItemsProvider = Provider<List<CatalogItem>>((ref) {
+  final raw = ref.watch(groceryCatalogProvider).value ?? const [];
+  final items = <CatalogItem>[];
+  for (final e in raw) {
+    if (e is Map) {
+      try {
+        final item = CatalogItem.fromJson(e);
+        if (item.name.isNotEmpty) items.add(item);
+      } catch (_) {}
+    }
+  }
+  return items;
+});
 
 
 class IsSelectionModeNotifier extends Notifier<bool> {

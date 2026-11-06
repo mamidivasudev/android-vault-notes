@@ -778,38 +778,99 @@ class GroceryItem {
   final String name;
   final bool isPurchased;
   final DateTime createdAt;
+  final String quantity; // e.g. "2", "1.5", "1/2"; empty = not set
+  final String unit; // e.g. "kg", "pack"; empty = not set
+  final String category; // catalog category, e.g. "Vegetables"; empty = Other
+  final String localName; // Telugu/Hindi name from the catalog, for display
+  final DateTime? purchasedAt;
 
   GroceryItem({
     String? id,
     required this.name,
     this.isPurchased = false,
     DateTime? createdAt,
+    this.quantity = '',
+    this.unit = '',
+    this.category = '',
+    this.localName = '',
+    this.purchasedAt,
   })  : id = id ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now();
+
+  /// "2 kg", "3", "pack" or '' when nothing is set.
+  String get quantityLabel => [quantity, unit].where((p) => p.isNotEmpty).join(' ');
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
         'isPurchased': isPurchased,
         'createdAt': createdAt.toIso8601String(),
+        'quantity': quantity,
+        'unit': unit,
+        'category': category,
+        if (localName.isNotEmpty) 'localName': localName,
+        if (purchasedAt != null) 'purchasedAt': purchasedAt!.toIso8601String(),
       };
 
-  factory GroceryItem.fromJson(Map<String, dynamic> json) => GroceryItem(
-        id: json['id']?.toString(),
-        name: json['name']?.toString() ?? '',
-        isPurchased: json['isPurchased'] == true,
-        createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? ''),
-      );
+  factory GroceryItem.fromJson(Map<String, dynamic> json) {
+    var name = json['name']?.toString() ?? '';
+    var quantity = json['quantity']?.toString() ?? '';
+    var unit = json['unit']?.toString() ?? '';
+    // Items saved before quantity/unit had their own fields stored them inside
+    // the name, e.g. "Rice (2 kg)". Split those once so nothing is lost.
+    if (!json.containsKey('quantity') && !json.containsKey('unit')) {
+      final legacy = splitLegacyGroceryName(name);
+      name = legacy.name;
+      quantity = legacy.quantity;
+      unit = legacy.unit;
+    }
+    return GroceryItem(
+      id: json['id']?.toString(),
+      name: name,
+      isPurchased: json['isPurchased'] == true,
+      createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? ''),
+      quantity: quantity,
+      unit: unit,
+      category: json['category']?.toString() ?? '',
+      localName: json['localName']?.toString() ?? '',
+      purchasedAt: DateTime.tryParse(json['purchasedAt']?.toString() ?? ''),
+    );
+  }
 
   GroceryItem copyWith({
     String? name,
     bool? isPurchased,
+    String? quantity,
+    String? unit,
+    String? category,
+    String? localName,
+    Object? purchasedAt = _sentinel,
   }) {
     return GroceryItem(
       id: id,
       name: name ?? this.name,
       isPurchased: isPurchased ?? this.isPurchased,
       createdAt: createdAt,
+      quantity: quantity ?? this.quantity,
+      unit: unit ?? this.unit,
+      category: category ?? this.category,
+      localName: localName ?? this.localName,
+      purchasedAt: purchasedAt == _sentinel ? this.purchasedAt : purchasedAt as DateTime?,
     );
   }
+}
+
+/// Splits an old-style grocery name such as "Rice (2 kg)" or "Milk (half kg)"
+/// into name / quantity / unit. Names without "( … )" are returned unchanged.
+({String name, String quantity, String unit}) splitLegacyGroceryName(String raw) {
+  final m = RegExp(r'^(.*?)\s*\((.*?)\)\s*$').firstMatch(raw);
+  if (m == null || m.group(1)!.trim().isEmpty) return (name: raw.trim(), quantity: '', unit: '');
+  final name = m.group(1)!.trim();
+  final inside = m.group(2)!.trim();
+  final q = RegExp(r'^(\d+(?:\.\d+)?|\d+/\d+|half|quarter)\s*(.*)$', caseSensitive: false).firstMatch(inside);
+  if (q == null) return (name: name, quantity: '', unit: inside);
+  var quantity = q.group(1)!;
+  if (quantity.toLowerCase() == 'half') quantity = '1/2';
+  if (quantity.toLowerCase() == 'quarter') quantity = '1/4';
+  return (name: name, quantity: quantity, unit: q.group(2)!.trim());
 }

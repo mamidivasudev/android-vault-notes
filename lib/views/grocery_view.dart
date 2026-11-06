@@ -1,11 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
+
 import '../models.dart';
 import '../providers.dart';
+import '../utils/grocery_catalog.dart';
 import '../utils/undo_helpers.dart';
-import '../profiles/providers/theme_provider.dart';
 
+const _green = Color(0xFF16A34A);
+
+/// Shopping list: one list grouped by category, quick add with catalog
+/// suggestions, "Buy again" from history and a collapsible "Bought" section.
 class GroceryView extends ConsumerStatefulWidget {
   const GroceryView({super.key});
 
@@ -14,665 +20,763 @@ class GroceryView extends ConsumerStatefulWidget {
 }
 
 class _GroceryViewState extends ConsumerState<GroceryView> {
-  final TextEditingController _itemController = TextEditingController();
-  final FocusNode _focusNode = FocusNode();
-  final ScrollController _scrollAll = ScrollController();
-  final ScrollController _scrollToBuy = ScrollController();
-  final ScrollController _scrollPurchased = ScrollController();
-  String _selectedUnit = '-';
-  final TextEditingController _qtyController = TextEditingController();
-  bool _hideSuggestions = false;
+  final _input = TextEditingController();
+  final _focus = FocusNode();
+  bool _showBought = true;
 
   @override
   void initState() {
     super.initState();
-    _itemController.addListener(() {
+    _input.addListener(() {
       if (mounted) setState(() {});
     });
   }
 
   @override
   void dispose() {
-    _itemController.dispose();
-    _qtyController.dispose();
-    _focusNode.dispose();
-    _scrollAll.dispose();
-    _scrollToBuy.dispose();
-    _scrollPurchased.dispose();
+    _input.dispose();
+    _focus.dispose();
     super.dispose();
   }
 
-  Future<void> _add() async {
-    String text = _itemController.text.trim();
-    if (text.isNotEmpty) {
-      String finalItem = text;
-      
-      final qty = _qtyController.text.trim();
-      final unit = _selectedUnit == '-' ? '' : _selectedUnit;
+  // ── Adding ────────────────────────────────────────────────────────────────
 
-      if (qty.isEmpty && unit.isEmpty) {
-        // Smart parse: Look for quantity at the end of the string
-        final smartMatch = RegExp(r'^(.*?)\s+((?:\d*\.?\d+|\d+\/\d+|half|quarter)?\s*(?:kg|kilograms|g|grams|l|liter|liters|ml|packet|packets|piece|pieces|dozen|rupees|pc|pcs|pack|packs|bottle|bottles|box|boxes))$', caseSensitive: false).firstMatch(text);
-        if (smartMatch != null) {
-          final extractedName = smartMatch.group(1)!.trim();
-          final extractedQty = smartMatch.group(2)!.trim();
-          finalItem = '$extractedName ($extractedQty)';
-        }
-      } else {
-        // Use explicit inputs
-        final parts = <String>[];
-        if (qty.isNotEmpty) parts.add(qty);
-        if (unit.isNotEmpty) parts.add(unit);
-        
-        if (parts.isNotEmpty) {
-          finalItem = '$text (${parts.join(' ')})';
-        }
-      }
-      
-      final messenger = ScaffoldMessenger.of(context);
-      final result = await ref.read(groceryProvider.notifier).addItem(finalItem);
-      if (!mounted) return;
-      _itemController.clear();
-      _qtyController.clear();
-      setState(() { 
-        _selectedUnit = '-'; 
-        _hideSuggestions = false;
-      });
-      _focusNode.requestFocus();
-      Future.delayed(const Duration(milliseconds: 100), () {
-      void scrollBottom(ScrollController c) {
-        if (c.hasClients) {
-          c.animateTo(c.position.maxScrollExtent, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
-        }
-      }
-      scrollBottom(_scrollAll);
-      scrollBottom(_scrollToBuy);
-    });
-      
-      final message = switch (result) {
-        GroceryAddResult.added => 'Item saved',
-        GroceryAddResult.alreadyOnList => 'Already on your list',
-        GroceryAddResult.movedBack => 'Moved back to "To buy"',
-        GroceryAddResult.ignored => null,
-      };
-      if (message == null) return;
-      messenger.clearSnackBars();
-      // A normal floating snackbar: the old fixed "screen height − 200" margin
-      // pushed it off screen while the keyboard was open.
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(message, textAlign: TextAlign.center),
-          duration: const Duration(seconds: 1),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.symmetric(horizontal: 60, vertical: 12),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-        ),
-      );
-    }
-  }
-
-  void _showDeleteDialog() {
-    final allItems = ref.read(groceryProvider);
-    Set<String> selectedIds = {};
-
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: const Text('Select Items to Delete'),
-            content: SizedBox(
-              width: double.maxFinite,
-              height: 400,
-              child: ListView.builder(
-                itemCount: allItems.length,
-                itemBuilder: (context, index) {
-                  final item = allItems[index];
-                  return CheckboxListTile(
-                    title: Text(item.name, style: TextStyle(
-                      decoration: item.isPurchased ? TextDecoration.lineThrough : null,
-                    )),
-                    value: selectedIds.contains(item.id),
-                    onChanged: (val) {
-                      setDialogState(() {
-                        if (val == true) {
-                          selectedIds.add(item.id);
-                        } else {
-                          selectedIds.remove(item.id);
-                        }
-                      });
-                    },
-                  );
-                },
-              ),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  deleteGroceryWithUndo(this.context, ref, selectedIds);
-                },
-                child: const Text('Delete', style: TextStyle(color: Colors.red)),
-              ),
-            ],
-          );
-        }
-      ),
+  /// Adds typed text ("tomato 1 kg"), filling category/unit from the catalog.
+  Future<void> _addTyped() async {
+    final parsed = parseGroceryInput(_input.text);
+    if (parsed.name.isEmpty) return;
+    final match = findCatalogItem(ref.read(groceryCatalogItemsProvider), parsed.name);
+    await _add(
+      match?.name ?? _capitalise(parsed.name),
+      quantity: parsed.quantity,
+      unit: parsed.unit.isNotEmpty ? parsed.unit : (parsed.quantity.isNotEmpty ? (match?.defaultUnit ?? '') : ''),
+      category: match?.category ?? '',
+      localName: match?.localName ?? '',
     );
   }
 
-  void _edit(GroceryItem item) {
-    String parsedName = item.name;
-    String parsedQty = '';
-    String parsedUnit = '-';
+  Future<void> _addCatalog(CatalogItem item) async {
+    // Keep a quantity the user typed ("onion 2" → tap Onion).
+    final parsed = parseGroceryInput(_input.text);
+    await _add(
+      item.name,
+      quantity: parsed.quantity,
+      unit: parsed.unit.isNotEmpty ? parsed.unit : (parsed.quantity.isNotEmpty ? item.defaultUnit : ''),
+      category: item.category,
+      localName: item.localName,
+    );
+  }
 
-    final match = RegExp(r'^(.*?)\s*\((.*?)\)$').firstMatch(item.name);
-    if (match != null) {
-      parsedName = match.group(1)!;
-      String qtyStr = match.group(2)!;
-      final units = ['kilograms', 'grams', 'half kg', '1/4 kg', 'kg', 'g', 'liter', 'L', 'ml', 'packet', 'piece', 'dozen', 'rupees'];
-      bool found = false;
-      for (var u in units) {
-        if (qtyStr.endsWith(u)) {
-          parsedUnit = u;
-          parsedQty = qtyStr.substring(0, qtyStr.length - u.length).trim();
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        parsedQty = qtyStr;
+  Future<void> _addFromHistory(GroceryHistoryEntry h) =>
+      _add(h.name, quantity: h.quantity, unit: h.unit, category: h.category, localName: h.localName, clearInput: false);
+
+  Future<void> _add(
+    String name, {
+    String quantity = '',
+    String unit = '',
+    String category = '',
+    String localName = '',
+    bool clearInput = true,
+  }) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final result = await ref.read(groceryProvider.notifier).addItem(
+          name,
+          quantity: quantity,
+          unit: unit,
+          category: category,
+          localName: localName,
+        );
+    if (!mounted) return;
+    HapticFeedback.selectionClick();
+    if (clearInput) {
+      _input.clear();
+      _focus.requestFocus(); // keep the keyboard up for the next item
+    }
+    final message = switch (result) {
+      GroceryAddResult.added => null, // the item appearing is feedback enough
+      GroceryAddResult.alreadyOnList => '$name is already on your list',
+      GroceryAddResult.movedBack => '$name moved back to your list',
+      GroceryAddResult.ignored => null,
+    };
+    if (message != null) {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(SnackBar(content: Text(message), duration: const Duration(seconds: 2)));
+    }
+  }
+
+  static String _capitalise(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
+  // ── List actions ──────────────────────────────────────────────────────────
+
+  void _share(List<GroceryItem> items) {
+    final toBuy = items.where((i) => !i.isPurchased).toList();
+    if (toBuy.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nothing to buy — the list is empty')));
+      return;
+    }
+    final buffer = StringBuffer('🛒 Shopping list (${toBuy.length})\n');
+    for (final group in _groupByCategory(toBuy)) {
+      buffer.writeln('\n${group.key}');
+      for (final i in group.value) {
+        buffer.writeln('☐ ${i.name}${i.quantityLabel.isNotEmpty ? ' — ${i.quantityLabel}' : ''}');
       }
     }
+    Share.share(buffer.toString().trim());
+  }
 
-    const editUnits = ['-', 'kg', 'half kg', 'grams', '1/4 kg', 'liter', 'ml', 'packet', 'piece', 'dozen', 'rupees'];
-    if (!editUnits.contains(parsedUnit)) {
-      // Keep the text as quantity instead of selecting a unit the dropdown can't show.
-      if (parsedUnit != '-') parsedQty = '$parsedQty $parsedUnit'.trim();
-      parsedUnit = '-';
-    }
-    final editNameController = TextEditingController(text: parsedName);
-    if (parsedQty == '-') parsedQty = '';
-    final editQtyController = TextEditingController(text: parsedQty);
-    String currentUnit = parsedUnit;
-
-    showDialog(
+  Future<void> _confirm(String title, String message, String action, Future<void> Function() run) async {
+    final ok = await showDialog<bool>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: const Text('Edit Item'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(action)),
+        ],
+      ),
+    );
+    if (ok == true) await run();
+  }
+
+  void _clearBought(List<GroceryItem> items) {
+    final ids = items.where((i) => i.isPurchased).map((i) => i.id).toSet();
+    if (ids.isEmpty) return;
+    deleteGroceryWithUndo(context, ref, ids);
+  }
+
+  void _onMenu(String value, List<GroceryItem> items) {
+    switch (value) {
+      case 'share':
+        _share(items);
+        break;
+      case 'shopAgain':
+        _confirm('Shop again?', 'Move every bought item back to the list.', 'Move back',
+            () => ref.read(groceryProvider.notifier).uncheckAll());
+        break;
+      case 'clearBought':
+        _clearBought(items);
+        break;
+      case 'clearAll':
+        if (items.isEmpty) return;
+        deleteGroceryWithUndo(context, ref, items.map((i) => i.id).toSet());
+        break;
+      case 'catalog':
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const GroceryMasterListView()));
+        break;
+    }
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    final items = ref.watch(groceryProvider);
+    final toBuy = items.where((i) => !i.isPurchased).toList();
+    final bought = items.where((i) => i.isPurchased).toList()
+      ..sort((a, b) => (b.purchasedAt ?? b.createdAt).compareTo(a.purchasedAt ?? a.createdAt));
+    final typing = _input.text.trim().isNotEmpty;
+
+    return Column(
+      children: [
+        _buildHeader(items, toBuy, bought),
+        _buildInput(),
+        Expanded(
+          child: typing ? _buildSuggestions(items) : _buildList(items, toBuy, bought),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHeader(List<GroceryItem> items, List<GroceryItem> toBuy, List<GroceryItem> bought) {
+    final scheme = Theme.of(context).colorScheme;
+    final total = items.length;
+    final progress = total == 0 ? 0.0 : bought.length / total;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 4, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextField(
-                  controller: editNameController,
-                  autofocus: true,
-                  textCapitalization: TextCapitalization.sentences,
-                  decoration: const InputDecoration(labelText: 'Item Name', border: OutlineInputBorder()),
+                Text(
+                  total == 0
+                      ? 'Your list is empty'
+                      : toBuy.isEmpty
+                          ? 'All ${bought.length} bought 🎉'
+                          : '${toBuy.length} to buy · ${bought.length} bought',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 3,
-                      child: Container(
-                        height: 56,
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade400),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: currentUnit,
-                            isExpanded: true,
-                            items: editUnits
-                                .map((u) => DropdownMenuItem(value: u, child: Text(u)))
-                                .toList(),
-                            onChanged: (val) {
-                              setDialogState(() { currentUnit = val!; });
-                            },
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      flex: 2,
-                      child: Container(
-                        height: 56,
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade400),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: editQtyController,
-                                keyboardType: TextInputType.number,
-                                textAlign: TextAlign.center,
-                                decoration: const InputDecoration(
-                                  border: InputBorder.none,
-                                  hintText: '-',
-                                  contentPadding: EdgeInsets.zero,
-                                ),
-                              ),
-                            ),
-                            PopupMenuButton<String>(
-                              icon: const Icon(Icons.arrow_drop_down, size: 20),
-                              padding: EdgeInsets.zero,
-                              onSelected: (val) {
-                                if (val == '-') {
-                                  editQtyController.clear();
-                                } else {
-                                  editQtyController.text = val;
-                                }
-                              },
-                              itemBuilder: (_) => ['-', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
-                                  .map((q) => PopupMenuItem(value: q, child: Text(q)))
-                                  .toList(),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                )
+                const SizedBox(height: 6),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 6,
+                    backgroundColor: scheme.onSurface.withValues(alpha: 0.08),
+                    valueColor: const AlwaysStoppedAnimation(_green),
+                  ),
+                ),
               ],
             ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-              TextButton(
-                onPressed: () {
-                  String finalName = editNameController.text.trim();
-                  if (finalName.isNotEmpty) {
-                    final q = editQtyController.text.trim();
-                    final u = currentUnit == '-' ? '' : currentUnit;
-                    if (q.isNotEmpty || u.isNotEmpty) {
-                      final parts = [];
-                      if (q.isNotEmpty) parts.add(q);
-                      if (u.isNotEmpty) parts.add(u);
-                      finalName = '$finalName (${parts.join(' ')})';
-                    }
-                    ref.read(groceryProvider.notifier).editItem(item.id, finalName);
-                  }
-                  Navigator.pop(context);
-                },
-                child: const Text('Save'),
-              ),
+          ),
+          IconButton(
+            tooltip: 'Share list',
+            icon: const Icon(Icons.share_outlined),
+            onPressed: () => _share(items),
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            onSelected: (v) => _onMenu(v, items),
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'catalog', child: ListTile(leading: Icon(Icons.menu_book_outlined), title: Text('Browse catalog'), contentPadding: EdgeInsets.zero)),
+              if (bought.isNotEmpty)
+                const PopupMenuItem(value: 'shopAgain', child: ListTile(leading: Icon(Icons.replay), title: Text('Shop again'), contentPadding: EdgeInsets.zero)),
+              if (bought.isNotEmpty)
+                const PopupMenuItem(value: 'clearBought', child: ListTile(leading: Icon(Icons.playlist_remove), title: Text('Clear bought'), contentPadding: EdgeInsets.zero)),
+              if (items.isNotEmpty)
+                const PopupMenuItem(value: 'clearAll', child: ListTile(leading: Icon(Icons.delete_sweep_outlined, color: Colors.red), title: Text('Clear whole list'), contentPadding: EdgeInsets.zero)),
             ],
-          );
-        }
+          ),
+        ],
       ),
     );
+  }
+
+  Widget _buildInput() {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+      child: TextField(
+        controller: _input,
+        focusNode: _focus,
+        textCapitalization: TextCapitalization.sentences,
+        textInputAction: TextInputAction.done,
+        onSubmitted: (_) => _addTyped(),
+        decoration: InputDecoration(
+          hintText: 'Add item — e.g. tomato 1 kg',
+          prefixIcon: const Icon(Icons.add_shopping_cart),
+          suffixIcon: _input.text.isEmpty
+              ? null
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(icon: const Icon(Icons.close), tooltip: 'Clear', onPressed: _input.clear),
+                    IconButton(
+                      icon: const Icon(Icons.check_circle, color: _green),
+                      tooltip: 'Add',
+                      onPressed: _addTyped,
+                    ),
+                  ],
+                ),
+          filled: true,
+          fillColor: scheme.onSurface.withValues(alpha: 0.05),
+          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
+        ),
+      ),
+    );
+  }
+
+  // ── Suggestions while typing ──────────────────────────────────────────────
+
+  Widget _buildSuggestions(List<GroceryItem> items) {
+    final catalog = ref.watch(groceryCatalogItemsProvider);
+    final parsed = parseGroceryInput(_input.text);
+    final matches = searchCatalog(catalog, parsed.name);
+    final onList = {for (final i in items) i.name.toLowerCase(): i};
+    final exact = matches.any((m) => m.name.toLowerCase() == parsed.name.toLowerCase());
+    final typedLabel = [parsed.quantity, parsed.unit].where((p) => p.isNotEmpty).join(' ');
+
+    return ListView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: const EdgeInsets.only(bottom: 24),
+      children: [
+        if (!exact)
+          ListTile(
+            leading: const CircleAvatar(backgroundColor: _green, child: Icon(Icons.add, color: Colors.white)),
+            title: Text('Add "${_capitalise(parsed.name)}"', style: const TextStyle(fontWeight: FontWeight.w600)),
+            subtitle: typedLabel.isEmpty ? const Text('Not in the catalog — added as Other') : Text(typedLabel),
+            onTap: _addTyped,
+          ),
+        for (final m in matches)
+          _SuggestionTile(
+            item: m,
+            existing: onList[m.name.toLowerCase()],
+            quantityHint: typedLabel.isNotEmpty ? typedLabel : null,
+            onTap: () => _addCatalog(m),
+          ),
+        if (matches.isEmpty && catalog.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+      ],
+    );
+  }
+
+  // ── The list ──────────────────────────────────────────────────────────────
+
+  Widget _buildList(List<GroceryItem> items, List<GroceryItem> toBuy, List<GroceryItem> bought) {
+    final buyAgain = ref.watch(groceryBuyAgainProvider);
+    final selected = ref.watch(selectedGroceryProvider);
+    final selecting = selected.isNotEmpty || ref.watch(isSelectionModeProvider);
+
+    if (items.isEmpty) {
+      return ListView(
+        padding: const EdgeInsets.only(bottom: 24),
+        children: [
+          if (buyAgain.isNotEmpty) _buildBuyAgain(buyAgain),
+          const SizedBox(height: 40),
+          Icon(Icons.shopping_basket_outlined, size: 72, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.25)),
+          const SizedBox(height: 12),
+          const Center(child: Text('Nothing on your list', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600))),
+          const SizedBox(height: 6),
+          Center(
+            child: Text(
+              'Type above to add items, or browse the catalog.',
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6)),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Center(
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.menu_book_outlined),
+              label: const Text('Browse catalog'),
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GroceryMasterListView())),
+            ),
+          ),
+        ],
+      );
+    }
+
+    Widget row(GroceryItem item) => _GroceryRow(
+          key: ValueKey(item.id),
+          item: item,
+          selecting: selecting,
+          selected: selected.contains(item.id),
+          onToggle: () {
+            if (selecting) {
+              ref.read(selectedGroceryProvider.notifier).toggle(item.id);
+            } else {
+              HapticFeedback.lightImpact();
+              ref.read(groceryProvider.notifier).toggleItem(item.id);
+            }
+          },
+          onLongPress: () {
+            if (!selecting) {
+              ref.read(isSelectionModeProvider.notifier).setState(true);
+              ref.read(selectedGroceryProvider.notifier).toggle(item.id);
+            }
+          },
+          onEdit: () => showGroceryItemEditor(context, ref, item),
+          onDelete: () => deleteGroceryWithUndo(context, ref, {item.id}),
+        );
+
+    return ListView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: const EdgeInsets.only(bottom: 32),
+      children: [
+        if (buyAgain.isNotEmpty && !selecting) _buildBuyAgain(buyAgain),
+        if (toBuy.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 20),
+            child: Center(
+              child: Text('Everything is bought ✓', style: TextStyle(color: _green.withValues(alpha: 0.9), fontWeight: FontWeight.w600)),
+            ),
+          ),
+        for (final group in _groupByCategory(toBuy)) ...[
+          _SectionHeader(title: group.key, count: group.value.length),
+          for (final item in group.value) row(item),
+        ],
+        if (bought.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          InkWell(
+            onTap: () => setState(() => _showBought = !_showBought),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 8, 6),
+              child: Row(
+                children: [
+                  Icon(_showBought ? Icons.expand_less : Icons.expand_more, size: 20),
+                  const SizedBox(width: 6),
+                  Text('Bought (${bought.length})', style: const TextStyle(fontWeight: FontWeight.w700)),
+                  const Spacer(),
+                  TextButton(onPressed: () => _clearBought(items), child: const Text('Clear')),
+                ],
+              ),
+            ),
+          ),
+          if (_showBought)
+            for (final item in bought) row(item),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildBuyAgain(List<GroceryHistoryEntry> entries) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 4, 16, 6),
+            child: Text('Buy again', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
+          ),
+          SizedBox(
+            height: 40,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              itemCount: entries.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (_, i) {
+                final h = entries[i];
+                return ActionChip(
+                  avatar: const Icon(Icons.add, size: 16),
+                  label: Text(h.name),
+                  onPressed: () => _addFromHistory(h),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Items grouped by category in shop order; items keep the order they were added.
+List<MapEntry<String, List<GroceryItem>>> _groupByCategory(List<GroceryItem> items) {
+  final map = <String, List<GroceryItem>>{};
+  for (final i in items) {
+    map.putIfAbsent(i.category.isEmpty ? 'Other' : i.category, () => []).add(i);
+  }
+  final entries = map.entries.toList()..sort((a, b) => groceryCategoryRank(a.key).compareTo(groceryCategoryRank(b.key)));
+  return entries;
+}
+
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final int count;
+  const _SectionHeader({required this.title, required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.primary;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+      child: Text(
+        '${title.toUpperCase()}  ·  $count',
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.8, color: color),
+      ),
+    );
+  }
+}
+
+class _GroceryRow extends StatelessWidget {
+  final GroceryItem item;
+  final bool selecting;
+  final bool selected;
+  final VoidCallback onToggle;
+  final VoidCallback onLongPress;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  const _GroceryRow({
+    super.key,
+    required this.item,
+    required this.selecting,
+    required this.selected,
+    required this.onToggle,
+    required this.onLongPress,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final done = item.isPurchased;
+    final muted = scheme.onSurface.withValues(alpha: 0.45);
+
+    final tile = Material(
+      color: selected ? scheme.primary.withValues(alpha: 0.10) : Colors.transparent,
+      child: InkWell(
+        onTap: onToggle,
+        onLongPress: onLongPress,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+          child: Row(
+            children: [
+              if (selecting)
+                Checkbox(value: selected, onChanged: (_) => onToggle())
+              else
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  width: 26,
+                  height: 26,
+                  margin: const EdgeInsets.symmetric(horizontal: 6),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: done ? _green : Colors.transparent,
+                    border: Border.all(color: done ? _green : muted, width: 2),
+                  ),
+                  child: done ? const Icon(Icons.check, size: 16, color: Colors.white) : null,
+                ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.name,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        decoration: done ? TextDecoration.lineThrough : null,
+                        color: done ? muted : null,
+                      ),
+                    ),
+                    if (item.localName.isNotEmpty)
+                      Text(item.localName, style: TextStyle(fontSize: 11, color: muted), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ],
+                ),
+              ),
+              if (!selecting)
+                InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: onEdit,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: item.quantityLabel.isEmpty ? Colors.transparent : scheme.primary.withValues(alpha: done ? 0.05 : 0.12),
+                      borderRadius: BorderRadius.circular(16),
+                      border: item.quantityLabel.isEmpty ? Border.all(color: muted.withValues(alpha: 0.4)) : null,
+                    ),
+                    child: Text(
+                      item.quantityLabel.isEmpty ? '+ qty' : item.quantityLabel,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: item.quantityLabel.isEmpty ? muted : (done ? muted : scheme.primary),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (selecting) return tile;
+    return Dismissible(
+      key: ValueKey('dismiss_${item.id}'),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        color: Colors.red,
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 24),
+        child: const Icon(Icons.delete_outline, color: Colors.white),
+      ),
+      onDismissed: (_) => onDelete(),
+      child: tile,
+    );
+  }
+}
+
+class _SuggestionTile extends StatelessWidget {
+  final CatalogItem item;
+  final GroceryItem? existing;
+  final String? quantityHint;
+  final VoidCallback onTap;
+
+  const _SuggestionTile({required this.item, required this.existing, required this.onTap, this.quantityHint});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final onListToBuy = existing != null && !existing!.isPurchased;
+    return ListTile(
+      dense: true,
+      title: Text(item.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+      subtitle: Text(
+        [if (item.localName.isNotEmpty) item.localName, item.category].join('  ·  '),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: onListToBuy
+          ? Text('On list', style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.5), fontWeight: FontWeight.w600))
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (quantityHint != null)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: Text(quantityHint!, style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700)),
+                  ),
+                Icon(existing != null ? Icons.replay : Icons.add_circle, color: _green),
+              ],
+            ),
+      onTap: onListToBuy ? null : onTap,
+    );
+  }
+}
+
+// ── Edit sheet ──────────────────────────────────────────────────────────────
+
+Future<void> showGroceryItemEditor(BuildContext context, WidgetRef ref, GroceryItem item) {
+  return showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (_) => _GroceryEditSheet(item: item),
+  );
+}
+
+class _GroceryEditSheet extends ConsumerStatefulWidget {
+  final GroceryItem item;
+  const _GroceryEditSheet({required this.item});
+
+  @override
+  ConsumerState<_GroceryEditSheet> createState() => _GroceryEditSheetState();
+}
+
+class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
+  late final TextEditingController _name = TextEditingController(text: widget.item.name);
+  late final TextEditingController _qty = TextEditingController(text: widget.item.quantity);
+  late String _unit = widget.item.unit;
+  late String _category = widget.item.category.isEmpty ? 'Other' : widget.item.category;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _qty.dispose();
+    super.dispose();
+  }
+
+  void _step(num delta) {
+    // Sensible steps: 0.25 for kg/L, 50 for g/ml, 1 otherwise.
+    final step = (_unit == 'kg' || _unit == 'L')
+        ? 0.25
+        : (_unit == 'g' || _unit == 'ml')
+            ? 50
+            : 1;
+    setState(() => _qty.text = stepQuantity(_qty.text, delta * step));
+  }
+
+  Future<void> _save() async {
+    final name = _name.text.trim();
+    if (name.isEmpty) return;
+    await ref.read(groceryProvider.notifier).updateItem(widget.item.copyWith(
+          name: name,
+          quantity: _qty.text.trim(),
+          unit: _unit,
+          category: _category == 'Other' ? '' : _category,
+        ));
+    if (mounted) Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = ref.watch(themeModeProvider) == ThemeMode.dark;
-    final items = ref.watch(groceryProvider);
+    final catalog = ref.watch(groceryCatalogItemsProvider);
+    final match = findCatalogItem(catalog, widget.item.name);
+    final units = <String>{...?match?.units, ...kGroceryUnits}.toList();
+    if (_unit.isNotEmpty && !units.contains(_unit)) units.insert(0, _unit);
+    final scheme = Theme.of(context).colorScheme;
 
-    final pending = items.where((e) => !e.isPurchased).toList();
-    final purchased = items.where((e) => e.isPurchased).toList();
-
-    Widget buildList(List<GroceryItem> list, ScrollController controller) {
-      return list.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.shopping_cart_outlined, size: 64, color: isDark ? Colors.white30 : Colors.black26),
-                  const SizedBox(height: 16),
-                  Text('No items here.', style: TextStyle(color: isDark ? Colors.white54 : Colors.black54, fontSize: 16)),
-                ],
-              ),
-            )
-          : Scrollbar(
-              controller: controller,
-              thumbVisibility: true,
-              child: ListView.builder(
-                controller: controller,
-                itemCount: list.length,
-                itemBuilder: (context, index) {
-                  return _buildItemTile(list[index], isDark);
-                },
-              ),
-            );
-    }
-
-    Widget buildSuggestions() {
-      final query = _itemController.text.trim().toLowerCase();
-      if (query.isEmpty) return const SizedBox.shrink();
-      
-      final catalogAsync = ref.watch(groceryCatalogProvider);
-      return catalogAsync.when(
-        data: (catalog) {
-          final suggestions = catalog.where((item) {
-            final names = item['names'] as Map<String, dynamic>? ?? {};
-            final searchTerms = item['search_terms'] as Map<String, dynamic>? ?? {};
-            
-            for (var v in names.values) {
-              if (v.toString().toLowerCase().contains(query)) return true;
-            }
-            for (var list in searchTerms.values) {
-              if (list is List) {
-                if (list.any((t) => t.toString().toLowerCase().contains(query))) return true;
-              }
-            }
-            return false;
-          }).take(4).toList();
-
-          if (suggestions.isEmpty) return const SizedBox.shrink();
-
-          return Container(
-            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            decoration: BoxDecoration(
-              color: isDark ? Colors.grey[850] : Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)]
+    return Padding(
+      padding: EdgeInsets.only(left: 20, right: 20, bottom: MediaQuery.viewInsetsOf(context).bottom + 20),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _name,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(labelText: 'Item', border: OutlineInputBorder()),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: suggestions.map((item) {
-                final itemName = item['names']?['en']?.toString() ?? 'Unknown';
-                String subtitle = '';
-                final names = item['names'] as Map<String, dynamic>? ?? {};
-                if (names.containsKey('te') && names['te'] != null) subtitle += names['te'].toString() + " ";
-                if (names.containsKey('hi') && names['hi'] != null) subtitle += names['hi'].toString() + " ";
-                if (names.containsKey('local') && names['local'] != null) subtitle += names['local'].toString();
-
-                return ListTile(
-                  dense: true,
-                  title: Text(itemName),
-                  subtitle: subtitle.trim().isNotEmpty ? Text(subtitle.trim(), style: const TextStyle(fontSize: 10)) : null,
-                  onTap: () {
-                    _itemController.text = itemName;
-                    _itemController.selection = TextSelection.fromPosition(TextPosition(offset: itemName.length));
-                    _focusNode.requestFocus();
-                  }
-                );
-              }).toList()
-            )
-          );
-        },
-        loading: () => const SizedBox.shrink(),
-        error: (_, __) => const SizedBox.shrink(),
-      );
-    }
-
-    return DefaultTabController(
-      length: 3,
-      child: Column(
-        children: [
-          // Tabs & Settings
-          Padding(
-            padding: const EdgeInsets.only(left: 16, right: 16, top: 8),
-            child: Row(
+            if (widget.item.localName.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6, left: 4),
+                child: Text(widget.item.localName, style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.6))),
+              ),
+            const SizedBox(height: 18),
+            const Text('Quantity', style: TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            Row(
               children: [
-                Expanded(
-                  child: TabBar(
-                    isScrollable: true,
-                    tabAlignment: TabAlignment.start,
-                    labelColor: isDark ? Colors.white : Colors.black87,
-                    unselectedLabelColor: isDark ? Colors.white30 : Colors.black38,
-                    indicatorColor: Colors.blue,
-                    labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                    tabs: [
-                      Tab(text: 'ALL (${items.length})'),
-                      Tab(text: 'NOT PURCHASED (${pending.length})'),
-                      Tab(text: 'PURCHASED (${purchased.length})'),
-                    ],
+                IconButton.filledTonal(onPressed: () => _step(-1), icon: const Icon(Icons.remove)),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 90,
+                  child: TextField(
+                    controller: _qty,
+                    textAlign: TextAlign.center,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(hintText: '—', border: OutlineInputBorder(), isDense: true),
                   ),
                 ),
-                PopupMenuButton<String>(
-                  icon: Icon(Icons.settings_outlined, color: isDark ? Colors.white70 : Colors.black87),
-                  onSelected: (value) {
-                    if (value == 'MasterList') {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const GroceryMasterListView()));
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$value coming soon')));
-                    }
-                  },
-                  itemBuilder: (context) {
-                    return const [
-                      PopupMenuItem(value: 'MasterList', child: Text('Master List')),
-                      PopupMenuDivider(),
-                      PopupMenuItem(value: 'Share', child: Text('Share List')),
-                      PopupMenuItem(value: 'Export', child: Text('Export List')),
-                      PopupMenuItem(value: 'Import', child: Text('Import List')),
-                    ];
-                  },
-                )
+                const SizedBox(width: 8),
+                IconButton.filledTonal(onPressed: () => _step(1), icon: const Icon(Icons.add)),
+                const Spacer(),
+                if (_qty.text.isNotEmpty || _unit.isNotEmpty)
+                  TextButton(
+                    onPressed: () => setState(() {
+                      _qty.clear();
+                      _unit = '';
+                    }),
+                    child: const Text('No quantity'),
+                  ),
               ],
             ),
-          ),
-          
-          // List area
-          Expanded(
-            child: Stack(
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
               children: [
-                TabBarView(
-                  children: [
-                    buildList(items, _scrollAll),
-                    buildList(pending, _scrollToBuy),
-                    buildList(purchased, _scrollPurchased),
-                  ],
-                ),
-                Positioned(
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  child: buildSuggestions(),
-                ),
+                for (final u in units)
+                  ChoiceChip(
+                    label: Text(u),
+                    selected: _unit == u,
+                    onSelected: (v) => setState(() => _unit = v ? u : ''),
+                  ),
               ],
             ),
-          ),
-
-          // Input area (WhatsApp style at bottom)
-          SafeArea(
-            bottom: true,
-            child: Padding(
-              padding: const EdgeInsets.only(left: 12.0, right: 12.0, bottom: 12.0, top: 4.0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _itemController,
-                      focusNode: _focusNode,
-                      textInputAction: TextInputAction.done,
-                      textCapitalization: TextCapitalization.sentences,
-                      decoration: InputDecoration(
-                        hintText: 'Add grocery item...',
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
-                        filled: true,
-                        fillColor: isDark ? Colors.grey.shade900 : Colors.white,
-                      ),
-                      onChanged: (val) {
-                        if (_hideSuggestions) {
-                          setState(() { _hideSuggestions = false; });
-                        }
-                      },
-                      onSubmitted: (_) => _add(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    height: 48,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    decoration: BoxDecoration(
-                      color: isDark ? Colors.grey.shade900 : Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey.shade400, width: 1),
-                    ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: _selectedUnit,
-                        isDense: true,
-                        menuMaxHeight: 300,
-                        icon: const Icon(Icons.arrow_drop_down, size: 20),
-                        style: TextStyle(fontSize: 13, color: isDark ? Colors.white : Colors.black87),
-                        items: ['-', 'kg', 'half kg', 'grams', '1/4 kg', 'liter', 'ml', 'packet', 'piece']
-                            .map((u) => DropdownMenuItem(value: u, child: Text(u)))
-                            .toList(),
-                        onChanged: (val) {
-                          setState(() { _selectedUnit = val!; });
-                        },
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Container(
-                    height: 48,
-                    width: 65,
-                    decoration: BoxDecoration(
-                      color: isDark ? Colors.grey.shade900 : Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey.shade400, width: 1),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _qtyController,
-                            keyboardType: TextInputType.number,
-                            textAlign: TextAlign.center,
-                            decoration: const InputDecoration(
-                              border: InputBorder.none,
-                              hintText: '-',
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                        ),
-                        PopupMenuButton<String>(
-                          icon: const Icon(Icons.arrow_drop_down, size: 20),
-                          padding: EdgeInsets.zero,
-                          onSelected: (val) {
-                            setState(() {
-                              if (val == '-') {
-                                _qtyController.clear();
-                              } else {
-                                _qtyController.text = val;
-                              }
-                            });
-                          },
-                          itemBuilder: (_) => ['-', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
-                              .map((q) => PopupMenuItem(value: q, child: Text(q)))
-                              .toList(),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  CircleAvatar(
-                    radius: 24,
-                    backgroundColor: const Color(0xFF1DA75E),
-                    child: IconButton(
-                      icon: const Icon(Icons.check, color: Colors.white),
-                      onPressed: _add,
-                    ),
-                  ),
-                ],
-              ),
+            const SizedBox(height: 18),
+            DropdownButtonFormField<String>(
+              initialValue: kGroceryCategoryOrder.contains(_category) ? _category : 'Other',
+              decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder()),
+              items: [for (final c in kGroceryCategoryOrder) DropdownMenuItem(value: c, child: Text(c))],
+              onChanged: (v) => setState(() => _category = v ?? 'Other'),
             ),
-          ),
-        ],
-      )
-    );
-  }
-
-  Widget _buildItemTile(GroceryItem item, bool isDark) {
-    String displayName = item.name;
-    String displayQty = '';
-    
-    final match = RegExp(r'^(.*?)\s*\((.*?)\)$').firstMatch(item.name);
-    if (match != null) {
-      displayName = match.group(1)!;
-      displayQty = match.group(2)!;
-    }
-
-    final selectedItems = ref.watch(selectedGroceryProvider);
-    final isSelectionMode = selectedItems.isNotEmpty || ref.watch(isSelectionModeProvider);
-    final isSelected = selectedItems.contains(item.id);
-
-    return ListTile(
-      leading: isSelectionMode ? Checkbox(
-        value: isSelected,
-        onChanged: (val) {
-          ref.read(selectedGroceryProvider.notifier).toggle(item.id);
-        },
-      ) : null,
-      selected: isSelected,
-      title: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Expanded(
-            flex: 1,
-            child: Text(
-              displayName,
-              style: TextStyle(
-                decoration: item.isPurchased ? TextDecoration.lineThrough : null,
-                color: item.isPurchased 
-                    ? (isDark ? Colors.white30 : Colors.black38) 
-                    : (isDark ? Colors.white : Colors.black87),
-              ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                TextButton.icon(
+                  icon: const Icon(Icons.delete_outline, color: Colors.red),
+                  label: const Text('Delete', style: TextStyle(color: Colors.red)),
+                  onPressed: () {
+                    final outer = Navigator.of(context);
+                    deleteGroceryWithUndo(context, ref, {widget.item.id});
+                    outer.pop();
+                  },
+                ),
+                const Spacer(),
+                FilledButton(onPressed: _save, child: const Text('Save')),
+              ],
             ),
-          ),
-          Expanded(
-            flex: 1,
-            child: displayQty.isNotEmpty
-                ? Padding(
-                    padding: const EdgeInsets.only(left: 8.0),
-                    child: Text(
-                      displayQty,
-                      textAlign: TextAlign.left,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        decoration: item.isPurchased ? TextDecoration.lineThrough : null,
-                        color: item.isPurchased 
-                            ? (isDark ? Colors.white30 : Colors.black38) 
-                            : (isDark ? Colors.white70 : Colors.black54),
-                      ),
-                    ),
-                  )
-                : const SizedBox.shrink(),
-          ),
-        ],
+          ],
+        ),
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.edit_outlined, size: 20),
-            color: Colors.blue,
-            onPressed: () => _edit(item),
-          ),
-          Icon(
-            item.isPurchased ? Icons.check_circle : Icons.check_circle_outline,
-            color: item.isPurchased ? Colors.green : Colors.grey.withOpacity(0.5),
-          ),
-        ],
-      ),
-      onTap: () {
-        if (isSelectionMode) {
-          ref.read(selectedGroceryProvider.notifier).toggle(item.id);
-        } else {
-          ref.read(groceryProvider.notifier).toggleItem(item.id);
-        }
-      },
-      onLongPress: () {
-        if (!isSelectionMode) {
-          ref.read(isSelectionModeProvider.notifier).setState(true);
-          ref.read(selectedGroceryProvider.notifier).toggle(item.id);
-        }
-      },
     );
   }
 }
+
+// ── Catalog browser ─────────────────────────────────────────────────────────
 
 class GroceryMasterListView extends ConsumerStatefulWidget {
   const GroceryMasterListView({super.key});
@@ -683,6 +787,7 @@ class GroceryMasterListView extends ConsumerStatefulWidget {
 
 class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
   final _searchController = TextEditingController();
+  String? _category;
 
   @override
   void dispose() {
@@ -690,117 +795,185 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
     super.dispose();
   }
 
+  Future<void> _add(CatalogItem item) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final result = await ref.read(groceryProvider.notifier).addItem(
+          item.name,
+          category: item.category,
+          localName: item.localName,
+        );
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(
+      duration: const Duration(seconds: 1),
+      content: Text(switch (result) {
+        GroceryAddResult.added => '${item.name} added',
+        GroceryAddResult.alreadyOnList => '${item.name} is already on your list',
+        GroceryAddResult.movedBack => '${item.name} moved back to your list',
+        GroceryAddResult.ignored => '',
+      }),
+    ));
+  }
+
   void _showAddItemDialog() {
-    final enController = TextEditingController();
+    final enController = TextEditingController(text: _searchController.text.trim());
     final localController = TextEditingController();
-    final searchController = TextEditingController();
+    final keywordsController = TextEditingController();
+    var category = _category ?? 'Other';
+    var unit = '';
 
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Add Custom Item'),
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Add to catalog'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextField(controller: enController, decoration: const InputDecoration(labelText: 'English Name (e.g. Rice)')),
-                TextField(controller: localController, decoration: const InputDecoration(labelText: 'Local Name (e.g. బియ్యం)')),
-                TextField(controller: searchController, decoration: const InputDecoration(labelText: 'Search Keywords (comma separated)')),
+                TextField(controller: enController, decoration: const InputDecoration(labelText: 'Name (e.g. Rice)')),
+                TextField(controller: localController, decoration: const InputDecoration(labelText: 'Local name (e.g. బియ్యం)')),
+                TextField(controller: keywordsController, decoration: const InputDecoration(labelText: 'Other search words (comma separated)')),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: category,
+                  decoration: const InputDecoration(labelText: 'Category'),
+                  items: [for (final c in kGroceryCategoryOrder) DropdownMenuItem(value: c, child: Text(c))],
+                  onChanged: (v) => setDialogState(() => category = v ?? 'Other'),
+                ),
+                DropdownButtonFormField<String>(
+                  initialValue: unit,
+                  decoration: const InputDecoration(labelText: 'Usual unit'),
+                  items: [
+                    const DropdownMenuItem(value: '', child: Text('None')),
+                    for (final u in kGroceryUnits) DropdownMenuItem(value: u, child: Text(u)),
+                  ],
+                  onChanged: (v) => setDialogState(() => unit = v ?? ''),
+                ),
               ],
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            TextButton(
+            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+            FilledButton(
               onPressed: () {
-                if (enController.text.trim().isNotEmpty) {
-                  ref.read(groceryCatalogProvider.notifier).addCustomItem(
-                    enController.text.trim(),
-                    localController.text.trim(),
-                    searchController.text.trim()
-                  );
-                }
-                Navigator.pop(context);
+                final name = enController.text.trim();
+                if (name.isEmpty) return;
+                ref.read(groceryCatalogProvider.notifier).addCustomItem(
+                      name,
+                      localController.text.trim(),
+                      keywordsController.text.trim(),
+                      category: category,
+                      unit: unit,
+                    );
+                Navigator.pop(dialogContext);
               },
-              child: const Text('Add')
+              child: const Text('Add'),
             ),
           ],
-        );
-      }
+        ),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final catalogAsync = ref.watch(groceryCatalogProvider);
-    final query = _searchController.text.trim().toLowerCase();
+    final catalog = ref.watch(groceryCatalogItemsProvider);
+    final loading = ref.watch(groceryCatalogProvider).isLoading;
+    final onList = {for (final i in ref.watch(groceryProvider)) i.name.toLowerCase(): i};
+    final query = _searchController.text.trim();
+
+    var items = query.isEmpty ? catalog : searchCatalog(catalog, query, limit: 300);
+    if (_category != null) items = items.where((i) => i.category == _category).toList();
+    if (query.isEmpty) {
+      items = [...items]..sort((a, b) {
+          final byCat = groceryCategoryRank(a.category).compareTo(groceryCategoryRank(b.category));
+          return byCat != 0 ? byCat : a.name.compareTo(b.name);
+        });
+    }
+    final categories = kGroceryCategoryOrder.where((c) => catalog.any((i) => i.category == c)).toList();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Grocery Master List'),
+        title: const Text('Grocery catalog'),
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(60),
-          child: Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: TextField(
-              controller: _searchController,
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                hintText: 'Search catalog...',
-                filled: true,
-                fillColor: Theme.of(context).cardColor,
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+          preferredSize: const Size.fromHeight(108),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: 'Search in English, తెలుగు or हिंदी…',
+                    filled: true,
+                    prefixIcon: const Icon(Icons.search),
+                    isDense: true,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
+                  ),
+                ),
               ),
-            ),
+              SizedBox(
+                height: 44,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(label: const Text('All'), selected: _category == null, onSelected: (_) => setState(() => _category = null)),
+                    ),
+                    for (final c in categories)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ChoiceChip(
+                          label: Text(c),
+                          selected: _category == c,
+                          onSelected: (v) => setState(() => _category = v ? c : null),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       ),
-      body: catalogAsync.when(
-        data: (catalog) {
-          final items = catalog.where((item) {
-            if (query.isEmpty) return true;
-            final names = item['names'] as Map<String, dynamic>? ?? {};
-            final searchTerms = item['search_terms'] as Map<String, dynamic>? ?? {};
-            
-            for (var v in names.values) {
-              if (v.toString().toLowerCase().contains(query)) return true;
-            }
-            for (var list in searchTerms.values) {
-              if (list is List) {
-                if (list.any((t) => t.toString().toLowerCase().contains(query))) return true;
-              }
-            }
-            return false;
-          }).toList();
-
-          if (items.isEmpty) return const Center(child: Text('No items found.'));
-
-          return ListView.builder(
-            itemCount: items.length,
-            itemBuilder: (context, index) {
-              final item = items[index];
-              final enName = item['names']?['en']?.toString() ?? 'Unknown';
-              String subtitle = '';
-              final names = item['names'] as Map<String, dynamic>? ?? {};
-              if (names.containsKey('te') && names['te'] != null) subtitle += names['te'].toString() + " ";
-              if (names.containsKey('hi') && names['hi'] != null) subtitle += names['hi'].toString() + " ";
-              if (names.containsKey('local') && names['local'] != null) subtitle += names['local'].toString();
-
-              return ListTile(
-                title: Text(enName),
-                subtitle: subtitle.trim().isNotEmpty ? Text(subtitle.trim()) : null,
-              );
-            },
-          );
-        },
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-      ),
-      floatingActionButton: FloatingActionButton(
+      body: loading && catalog.isEmpty
+          ? const Center(child: CircularProgressIndicator())
+          : items.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('No items found.'),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add it to the catalog'),
+                        onPressed: _showAddItemDialog,
+                      ),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  itemCount: items.length,
+                  itemBuilder: (context, index) {
+                    final item = items[index];
+                    final existing = onList[item.name.toLowerCase()];
+                    final showHeader = query.isEmpty && (index == 0 || items[index - 1].category != item.category);
+                    final tile = _SuggestionTile(item: item, existing: existing, onTap: () => _add(item));
+                    if (!showHeader) return tile;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [_SectionHeader(title: item.category, count: catalog.where((i) => i.category == item.category).length), tile],
+                    );
+                  },
+                ),
+      floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddItemDialog,
-        child: const Icon(Icons.add),
+        icon: const Icon(Icons.add),
+        label: const Text('Custom item'),
       ),
     );
   }

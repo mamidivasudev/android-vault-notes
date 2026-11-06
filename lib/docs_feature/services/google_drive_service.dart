@@ -5,6 +5,8 @@ import 'package:extension_google_sign_in_as_googleapis_auth/extension_google_sig
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive_io.dart';
 import 'package:hive/hive.dart';
+import 'package:path/path.dart' as p;
+import 'local_storage_service.dart';
 
 class GoogleDriveService {
   final GoogleSignIn _googleSignIn = GoogleSignIn(
@@ -16,6 +18,9 @@ class GoogleDriveService {
 
   Future<drive.DriveApi?> _getDriveApi() async {
     var account = _googleSignIn.currentUser;
+    // Reuse the existing session first so backup/restore doesn't pop the
+    // account chooser every time it's called from the main sync.
+    account ??= await _googleSignIn.signInSilently();
     account ??= await _googleSignIn.signIn();
     
     if (account == null) return null; // User cancelled
@@ -45,22 +50,27 @@ class GoogleDriveService {
     final encoder = ZipFileEncoder();
     encoder.create(zipFile.path);
 
-    // Add Hive DB directory
-    // Hive defaults to the path provided in initFlutter() which is usually app doc dir / path
-    // But since we used hive_flutter, it's typically the app doc dir.
-    // Let's add the 'documentsBoxV3.hive' file directly.
-    final hiveFile = File('${appDir.path}/documentsBoxV3.hive');
+    // Add the Hive DB file. Hive lower-cases box names on disk
+    // ('documentsboxv3.hive'), so the real path is taken from the open box
+    // instead of being guessed -- the old hard-coded 'documentsBoxV3.hive'
+    // never existed, which meant document records were never backed up.
+    final box = Hive.box(LocalStorageService.boxName);
+    await box.flush();
+    final hivePath = LocalStorageService.boxFilePath ?? '${appDir.path}/${LocalStorageService.boxName.toLowerCase()}.hive';
+    final hiveFile = File(hivePath);
     if (await hiveFile.exists()) {
-      encoder.addFile(hiveFile);
+      await encoder.addFile(hiveFile, p.basename(hivePath));
     }
 
     // Add images directory
     final imagesDir = Directory('${appDir.path}/images');
     if (await imagesDir.exists()) {
-      encoder.addDirectory(imagesDir);
+      await encoder.addDirectory(imagesDir);
     }
-    
-    encoder.close();
+
+    // addFile/addDirectory/close are async; without awaiting them the zip
+    // could be closed before the images were written into it.
+    await encoder.close();
 
     // 2. Upload to Google Drive (appDataFolder)
     final driveFile = drive.File()
@@ -70,10 +80,31 @@ class GoogleDriveService {
     final media = drive.Media(zipFile.openRead(), zipFile.lengthSync());
     
     await api.files.create(driveFile, uploadMedia: media);
-    
+
     // Cleanup local zip
     if (await zipFile.exists()) {
       await zipFile.delete();
+    }
+
+    // Every backup is a new file; keep only the newest few so Drive storage
+    // doesn't grow forever.
+    await _pruneOldBackups(api, keep: 3);
+  }
+
+  Future<void> _pruneOldBackups(drive.DriveApi api, {required int keep}) async {
+    try {
+      final list = await api.files.list(
+        spaces: 'appDataFolder',
+        q: "name contains 'lifevault_backup_'",
+        $fields: 'files(id, name, createdTime)',
+        orderBy: 'createdTime desc',
+      );
+      final files = list.files ?? [];
+      for (final f in files.skip(keep)) {
+        if (f.id != null) await api.files.delete(f.id!);
+      }
+    } catch (e) {
+      print('Could not prune old docs backups: $e');
     }
   }
 
@@ -117,22 +148,26 @@ class GoogleDriveService {
     final bytes = tempZipFile.readAsBytesSync();
     final archive = ZipDecoder().decodeBytes(bytes);
 
-    for (final file in archive) {
-      final filename = file.name;
-      if (file.isFile) {
-        final data = file.content as List<int>;
-        File('${appDir.path}/$filename')
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(data);
-      } else {
-        Directory('${appDir.path}/$filename').createSync(recursive: true);
+    try {
+      final root = p.normalize(appDir.path);
+      for (final file in archive) {
+        // Refuse entries that would escape the app directory ("../" paths).
+        final target = p.normalize(p.join(root, file.name));
+        if (!p.isWithin(root, target)) continue;
+        if (file.isFile) {
+          final data = file.content as List<int>;
+          File(target)
+            ..createSync(recursive: true)
+            ..writeAsBytesSync(data);
+        } else {
+          Directory(target).createSync(recursive: true);
+        }
       }
+    } finally {
+      // Cleanup and re-open the box we closed above, otherwise every later
+      // Docs read/write throws until the app is restarted.
+      if (await tempZipFile.exists()) await tempZipFile.delete();
+      await LocalStorageService.reopen();
     }
-
-    // Cleanup
-    await tempZipFile.delete();
-
-    // Restart Hive - user must restart app ideally, but we can try to re-init
-    // Note: It's best if the caller triggers a full app restart or reloads the provider.
   }
 }

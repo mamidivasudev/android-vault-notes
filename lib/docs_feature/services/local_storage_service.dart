@@ -10,6 +10,17 @@ class LocalStorageService {
     await Hive.openBox<DocumentModel>(boxName);
   }
 
+  /// Opens the box again after it was closed (e.g. to overwrite it during a restore).
+  static Future<void> reopen() async {
+    if (!Hive.isBoxOpen(boxName)) {
+      await Hive.openBox<DocumentModel>(boxName);
+    }
+  }
+
+  /// Absolute path of the Hive file backing the documents box.
+  static String? get boxFilePath =>
+      Hive.isBoxOpen(boxName) ? Hive.box<DocumentModel>(boxName).path : null;
+
   Future<void> addDocument(DocumentModel document) async {
     final box = Hive.box<DocumentModel>(boxName);
     await box.put(document.id, document);

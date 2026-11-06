@@ -44,16 +44,16 @@ class EmptyState extends StatelessWidget {
               style: GoogleFonts.lexend(
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
-                color: Colors.black87,
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.87),
               ),
             ),
             const SizedBox(height: 12),
             Text(
               subtitle,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14,
-                color: Colors.black54,
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
                 height: 1.5,
               ),
             ),

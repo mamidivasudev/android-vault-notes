@@ -28,6 +28,10 @@ class NotificationService {
 
   Future<void> scheduleExpiryReminder(String docId, String title, DateTime expiryDate) async {
     final id = docId.hashCode & 0x0FFFFFFF;
+    // Expiry dates are picked without a time (midnight); alert at 9 AM instead.
+    expiryDate = DateTime(expiryDate.year, expiryDate.month, expiryDate.day, 9);
+    // Drop reminders from a previous expiry date before scheduling new ones.
+    await cancelReminders(docId);
     
     // Schedule 7 days before
     final reminderDate7 = expiryDate.subtract(const Duration(days: 7));

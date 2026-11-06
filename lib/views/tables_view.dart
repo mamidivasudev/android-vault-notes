@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../models.dart';
 import '../providers.dart';
+import '../utils/undo_helpers.dart';
 import '../widgets/category_chip_bar.dart';
 import '../widgets/empty_state.dart';
 import '../main_helpers.dart';
@@ -15,6 +16,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:excel/excel.dart' as excel_pkg;
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
+import 'dart:convert';
 
 
 class TablesView extends ConsumerStatefulWidget {
@@ -90,7 +92,7 @@ class _TablesViewState extends ConsumerState<TablesView> {
             final matchCat = t.category == currentSelectedCat;
             final matchFav = !showFavs || t.isFavorite;
             if (query.isEmpty) return matchCat && matchFav;
-            return matchCat && matchFav && t.title.toLowerCase().contains(query);
+            return matchCat && matchFav && _tableMatches(t, query);
           }).length,
         ),
         Expanded(
@@ -108,7 +110,7 @@ class _TablesViewState extends ConsumerState<TablesView> {
                 final matchCat = t.category == cat;
                 final matchFav = !showFavs || t.isFavorite;
                 if (query.isEmpty) return matchCat && matchFav;
-                return matchCat && matchFav && t.title.toLowerCase().contains(query);
+                return matchCat && matchFav && _tableMatches(t, query);
               }).toList();
 
               // Sorting logic
@@ -117,11 +119,13 @@ class _TablesViewState extends ConsumerState<TablesView> {
                 if (!a.isPinned && b.isPinned) return 1;
 
                 switch (sortOrder) {
-                  case NoteSortOrder.dateNewest: return b.createdAt.compareTo(a.createdAt);
                   case NoteSortOrder.dateOldest: return a.createdAt.compareTo(b.createdAt);
                   case NoteSortOrder.atoz: return a.title.toLowerCase().compareTo(b.title.toLowerCase());
                   case NoteSortOrder.ztoa: return b.title.toLowerCase().compareTo(a.title.toLowerCase());
-                  default: return b.createdAt.compareTo(a.createdAt);
+                  case NoteSortOrder.dateNewest:
+                  case NoteSortOrder.modifiedNewest:
+                  case NoteSortOrder.manual:
+                    return b.createdAt.compareTo(a.createdAt);
                 }
               });
 
@@ -142,7 +146,7 @@ class _TablesViewState extends ConsumerState<TablesView> {
                   final table = filteredTables[index];
                   return _TableCard(table: table, baseFontSize: baseFontSize)
                       .animate()
-                      .fadeIn(delay: (50 * index).ms, duration: 300.ms)
+                      .fadeIn(delay: (50 * (index < 8 ? index : 8)).ms, duration: 300.ms)
                       .slideY(begin: 0.1, end: 0, curve: Curves.easeOut);
                 },
               );
@@ -154,9 +158,23 @@ class _TablesViewState extends ConsumerState<TablesView> {
   }
 
 
+  /// Search matches the title, description, column names and cell text.
+  static bool _tableMatches(VaultTable t, String query) {
+    if (t.title.toLowerCase().contains(query)) return true;
+    if (t.isLocked) return false; // don't reveal locked contents through search
+    if (t.description.toLowerCase().contains(query)) return true;
+    if (t.columns.any((c) => c.text.toLowerCase().contains(query))) return true;
+    return t.rows.any((r) => r.any((c) => c.text.toLowerCase().contains(query)));
+  }
+
   void _createNewTable() {
+    // Use the category actually on screen; the stored selection can be stale
+    // (e.g. after a rename), which used to create a table nobody could see.
+    final categories = ref.read(tableCategoriesProvider);
     final selectedCat = ref.read(selectedTableCategoryProvider);
-    final initialCat = selectedCat;
+    final initialCat = categories.contains(selectedCat)
+        ? selectedCat
+        : (categories.isNotEmpty ? categories.first : 'General');
     
     ref.read(editingTableProvider.notifier).state = VaultTable(
       title: '',
@@ -474,6 +492,7 @@ class _TableCard extends ConsumerWidget {
   }
 
   void _confirmDeleteTable(BuildContext context, WidgetRef ref, VaultTable table) {
+    final outerContext = context;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -483,8 +502,8 @@ class _TableCard extends ConsumerWidget {
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           TextButton(
             onPressed: () {
-              ref.read(tablesProvider.notifier).deleteTable(table.id);
               Navigator.pop(context);
+              deleteTableWithUndo(outerContext, ref, table);
             },
             child: const Text('Delete', style: TextStyle(color: Colors.red)),
           ),
@@ -732,6 +751,10 @@ class TableEditorDialog extends ConsumerStatefulWidget {
   final bool isNew;
   const TableEditorDialog({super.key, required this.table, this.isNew = false});
 
+  /// Set while an editor is open; the app's back handler calls it so unsaved
+  /// changes are not thrown away silently.
+  static Future<void> Function()? onBackRequested;
+
   @override
   ConsumerState<TableEditorDialog> createState() => _TableEditorDialogState();
 }
@@ -791,10 +814,45 @@ class _TableEditorDialogState extends ConsumerState<TableEditorDialog> {
     if (_columnWidths.length < _columnControllers.length) {
       _columnWidths.addAll(List.generate(_columnControllers.length - _columnWidths.length, (_) => 120.0));
     }
+    _initialSignature = jsonEncode(_buildTable().toJson());
+    TableEditorDialog.onBackRequested = _requestClose;
+  }
+
+  late final String _initialSignature;
+
+  bool get _hasUnsavedChanges => jsonEncode(_buildTable().toJson()) != _initialSignature;
+
+  /// Closes the editor, asking first if there are unsaved changes.
+  Future<void> _requestClose() async {
+    if (!_hasUnsavedChanges) {
+      ref.read(editingTableProvider.notifier).state = null;
+      return;
+    }
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Unsaved Changes'),
+        content: const Text('Save your changes to this table?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('Discard', style: TextStyle(color: Colors.red))),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (choice == 'save') {
+      _handleSave();
+    } else if (choice == 'discard') {
+      ref.read(editingTableProvider.notifier).state = null;
+    }
   }
 
   @override
   void dispose() {
+    if (TableEditorDialog.onBackRequested == _requestClose) {
+      TableEditorDialog.onBackRequested = null;
+    }
     _titleController.dispose();
     _descriptionController.dispose();
     for (var controller in _columnControllers) { controller.dispose(); }
@@ -802,8 +860,16 @@ class _TableEditorDialogState extends ConsumerState<TableEditorDialog> {
     super.dispose();
   }
 
+  /// Spreadsheet column name: 0 -> A, 25 -> Z, 26 -> AA (matches FormulaEvaluator).
   String _getColLetter(int index) {
-    return String.fromCharCode('A'.codeUnitAt(0) + index);
+    var n = index + 1;
+    var name = '';
+    while (n > 0) {
+      final rem = (n - 1) % 26;
+      name = String.fromCharCode(65 + rem) + name;
+      n = (n - 1) ~/ 26;
+    }
+    return name;
   }
 
   String _cellKey(int row, int col) => '$row,$col';
@@ -1107,6 +1173,16 @@ class _TableEditorDialogState extends ConsumerState<TableEditorDialog> {
   }
 
   void _handleSave() {
+    final updatedTable = _buildTable();
+    if (widget.isNew) {
+      ref.read(tablesProvider.notifier).addTable(updatedTable);
+    } else {
+      ref.read(tablesProvider.notifier).updateTable(updatedTable);
+    }
+    ref.read(editingTableProvider.notifier).state = null;
+  }
+
+  VaultTable _buildTable() {
     final List<VaultTableCell> columns = _columnControllers.asMap().entries.map((entry) {
       final idx = entry.key;
       return VaultTableCell(
@@ -1133,7 +1209,7 @@ class _TableEditorDialogState extends ConsumerState<TableEditorDialog> {
       }).toList();
     }).toList();
 
-    final updatedTable = widget.table.copyWith(
+    return widget.table.copyWith(
       title: _titleController.text,
       description: _descriptionController.text,
       columns: columns,
@@ -1141,13 +1217,6 @@ class _TableEditorDialogState extends ConsumerState<TableEditorDialog> {
       columnWidths: _columnWidths,
       category: _category,
     );
-
-    if (widget.isNew) {
-      ref.read(tablesProvider.notifier).addTable(updatedTable);
-    } else {
-      ref.read(tablesProvider.notifier).updateTable(updatedTable);
-    }
-    ref.read(editingTableProvider.notifier).state = null;
   }
 
 
@@ -1175,7 +1244,7 @@ class _TableEditorDialogState extends ConsumerState<TableEditorDialog> {
             children: [
               Row(
                 children: [
-                  IconButton(onPressed: () => ref.read(editingTableProvider.notifier).state = null, icon: const Icon(Icons.arrow_back)),
+                  IconButton(onPressed: _requestClose, icon: const Icon(Icons.arrow_back)),
                   const SizedBox(width: 8),
                   Expanded(child: TextField(controller: _titleController, decoration: const InputDecoration(hintText: 'Table Title', border: InputBorder.none), style: TextStyle(fontWeight: FontWeight.bold, fontSize: baseFontSize + 4))),
                   IconButton(icon: Icon(Icons.undo, color: _undoStack.isEmpty ? Colors.grey : Colors.black), onPressed: _undoStack.isEmpty ? null : _undo),

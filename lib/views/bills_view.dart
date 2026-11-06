@@ -10,6 +10,7 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models.dart';
 import '../providers.dart';
+import '../utils/undo_helpers.dart';
 import '../dialogs/bill_dialog.dart';
 import '../profiles/providers/theme_provider.dart';
 import '../notification_service.dart';
@@ -48,12 +49,9 @@ class _BillsViewState extends ConsumerState<BillsView> {
           // FIX: Returns true ONLY when the bill was actually paid in the current month.
           // Previously the green badge was always shown, or was based on hardcoded bank names.
           final now = DateTime.now();
-          bool isPaidThisMonth(Bill bill) {
-            if (!bill.isPaid) return false;
-            if (bill.lastPaidDate == null) return false;
-            return bill.lastPaidDate!.year == now.year &&
-                bill.lastPaidDate!.month == now.month;
-          }
+          // Paid for the current billing cycle (follows the due date, so an
+          // early payment at the end of the previous month still counts).
+          bool isPaidThisMonth(Bill bill) => bill.isPaidForCycle(now);
 
           Future<void> editLoan(Bill loan) async {
             final leftController = TextEditingController(
@@ -177,14 +175,9 @@ class _BillsViewState extends ConsumerState<BillsView> {
                 ],
               ),
             );
-            if (confirm == true) {
-              ref.read(billsProvider.notifier).deleteBill(loan.id);
+            if (confirm == true && context.mounted) {
+              deleteBillsWithUndo(context, ref, [loan]);
               setSheetState(() {});
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('${loan.title} deleted')),
-                );
-              }
             }
           }
 
@@ -721,15 +714,21 @@ class _BillsViewState extends ConsumerState<BillsView> {
     final loanDetails = currentLoanBills.map((b) => <String, dynamic>{'title': b.title, 'amount': b.amount}).toList();
 
     final now = DateTime.now();
-    await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
-      now.year, 
-      now.month, 
-      currentCredit, 
-      currentLoan,
-      creditDetails: creditDetails,
-      loanDetails: loanDetails,
-    );
+    final existingReports = await ref.read(vaultServiceProvider).loadMonthlyReports();
+    final currentEntry = existingReports.where((r) => r['year'] == now.year && r['month'] == now.month);
+    final editedByHand = currentEntry.isNotEmpty && currentEntry.first['manual'] == true;
+    if (!editedByHand) {
+      await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
+        now.year,
+        now.month,
+        currentCredit,
+        currentLoan,
+        creditDetails: creditDetails,
+        loanDetails: loanDetails,
+      );
+    }
     var reports = await ref.read(vaultServiceProvider).loadMonthlyReports();
+    if (!context.mounted) return;
     try {
       final prefs = await SharedPreferences.getInstance();
       const seenKey = 'monthly_report_seen';
@@ -743,13 +742,13 @@ class _BillsViewState extends ConsumerState<BillsView> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
-                Text('• The current month is automatically updated when you open this report.'),
+                Text('• The current month is automatically updated when you open this report (unless you edited it by hand).'),
                 SizedBox(height: 6),
-                Text('• Tap the three-dot menu on a month to edit its saved values.'),
+                Text('• Use the edit (calendar) button to change any month\'s saved values.'),
                 SizedBox(height: 6),
-                Text('• Snapshots are saved to monthly_reports.json and included in Drive export.'),
+                Text('• Snapshots are saved to monthly_reports.json and included in the Drive backup.'),
                 SizedBox(height: 6),
-                Text('• Range shown is May 2026 — May 2028; you can edit any month.'),
+                Text('• Tap a month with details to expand it.'),
               ],
             ),
             actions: [TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('Got it'))],
@@ -869,7 +868,9 @@ class _BillsViewState extends ConsumerState<BillsView> {
                             ),
                           ),
                           Text(
-                            'May 2026 – May 2028',
+                            months.isEmpty
+                                ? ''
+                                : '${months.first['label']} – ${months.last['label']}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -983,6 +984,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                       y, selectedMonth, cTotal, lTotal,
                                       creditDetails: creditDetails,
                                       loanDetails: loanDetails,
+                                      manual: true,
                                     );
                                     Navigator.pop(dctx, true);
                                   },
@@ -1378,6 +1380,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                                     double lTotal = double.tryParse(rawLoanController!.text.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0.0;
                                                     await ref.read(vaultServiceProvider).addOrUpdateMonthlySnapshot(
                                                       y, selectedMonth, cTotal, lTotal,
+                                                      manual: true,
                                                     );
                                                   } else {
                                                     for (int i = 0; i < creditDetails.length; i++) {
@@ -1394,6 +1397,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                                       y, selectedMonth, cTotal, lTotal,
                                                       creditDetails: creditDetails,
                                                       loanDetails: loanDetails,
+                                                      manual: true,
                                                     );
                                                   }
                                                   sheetResult = true;
@@ -1757,7 +1761,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 16, top: 4),
                 child: Text(
-                  'Long press a month to edit values',
+                  'Tap a month to see details · use the edit button to change values',
                   style: TextStyle(
                     fontSize: 11,
                     color:
@@ -1788,35 +1792,24 @@ class _BillsViewState extends ConsumerState<BillsView> {
     final bills = ref.watch(billsProvider);
     final isDark = ref.watch(themeModeProvider) == ThemeMode.dark;
 
+    // A bill paid for an earlier cycle becomes unpaid when a new cycle starts
+    // (also while the app stays open across the change).
     final now = DateTime.now();
-    for (var bill in bills) {
-      if (bill.isPaid && bill.lastPaidDate != null) {
-        if (bill.lastPaidDate!.month != now.month ||
-            bill.lastPaidDate!.year != now.year) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            ref
-                .read(billsProvider.notifier)
-                .updateBill(bill.copyWith(isPaid: false));
-          });
-        }
-      }
-    }
-
-    final activeBills = bills.where((b) => !b.isPaid).toList();
-    final paidBills = bills.where((b) => b.isPaid).toList();
-
-    void sortBills(List<Bill> list) {
-      final typeOrder = {'Loan': 0, 'Credit Card': 1};
-      list.sort((a, b) {
-        final aO = typeOrder[a.type] ?? 2;
-        final bO = typeOrder[b.type] ?? 2;
-        if (aO != bO) return aO.compareTo(bO);
-        return _daysUntil(a.dueDate).compareTo(_daysUntil(b.dueDate));
+    if (bills.any((b) => b.isPaid && b.paidCycle != b.currentCycle(now))) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) ref.read(billsProvider.notifier).refreshPaidStatus();
       });
     }
 
-    sortBills(activeBills);
-    sortBills(paidBills);
+    // Unpaid first, then the soonest due date.
+    void sortBills(List<Bill> list) {
+      list.sort((a, b) {
+        if (a.isPaid != b.isPaid) return a.isPaid ? 1 : -1;
+        final byDue = _daysUntil(a.dueDate).compareTo(_daysUntil(b.dueDate));
+        if (byDue != 0) return byDue;
+        return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+      });
+    }
 
     final List<Widget> slivers = [];
     {
@@ -1830,6 +1823,9 @@ class _BillsViewState extends ConsumerState<BillsView> {
       !((b.type ?? '') == 'Loan' ||
           (b.type ?? 'Credit Card') == 'Credit Card'))
           .toList();
+      sortBills(creditBills);
+      sortBills(loanBills);
+      sortBills(otherBills);
 
       if (creditBills.isNotEmpty) {
         slivers.add(
@@ -2364,7 +2360,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                                   onChanged:
                                                       (val) async {
                                                     for (final bill
-                                                    in activeBills) {
+                                                    in bills) {
                                                       final updated =
                                                       bill.copyWith(
                                                           reminderEnabled:
@@ -2374,23 +2370,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                                                           .notifier)
                                                           .updateBill(
                                                           updated);
-                                                      await NotificationService()
-                                                          .scheduleBillNotifications(
-                                                        billId: updated.id,
-                                                        title:
-                                                        'Bill Reminder: ${updated.title}',
-                                                        dueDay:
-                                                        updated.dueDate,
-                                                        reminderDaysBeforeList:
-                                                        updated
-                                                            .reminderDaysBeforeList,
-                                                        hour: updated
-                                                            .reminderHour,
-                                                        minute: updated
-                                                            .reminderMinute,
-                                                        enabled: updated
-                                                            .reminderEnabled,
-                                                      );
+                                                      await NotificationService().scheduleBillNotificationsFor(updated);
                                                     }
                                                     if (context.mounted) {
                                                       ScaffoldMessenger.of(
@@ -2470,12 +2450,14 @@ class _BillsViewState extends ConsumerState<BillsView> {
 
   int _daysUntil(int dueDay) {
     final now = DateTime.now();
-    if (now.day > dueDay) {
-      final daysInThisMonth =
-          DateTime(now.year, now.month + 1, 0).day;
-      return (daysInThisMonth - now.day) + dueDay;
+    final daysInThisMonth = DateTime(now.year, now.month + 1, 0).day;
+    final dueThisMonth = dueDay > daysInThisMonth ? daysInThisMonth : dueDay;
+    if (now.day > dueThisMonth) {
+      final daysInNextMonth = DateTime(now.year, now.month + 2, 0).day;
+      final dueNextMonth = dueDay > daysInNextMonth ? daysInNextMonth : dueDay;
+      return (daysInThisMonth - now.day) + dueNextMonth;
     } else {
-      return dueDay - now.day;
+      return dueThisMonth - now.day;
     }
   }
 
@@ -2515,8 +2497,9 @@ class _BillsViewState extends ConsumerState<BillsView> {
             itemBuilder: (context, index) {
               if (index < leadSpaces) return const SizedBox.shrink();
               final day = index - leadSpaces + 1;
-              final dayBills =
-              bills.where((b) => b.dueDate == day).toList();
+              final dayBills = bills
+                  .where((b) => (b.dueDate > daysInMonth ? daysInMonth : b.dueDate) == day)
+                  .toList();
               final isToday = now.day == day;
               final anyUnpaid = dayBills.any((b) => !b.isPaid);
 
@@ -2650,10 +2633,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                           onPressed: () {
                             Navigator.pop(ctx);
                             if (bill.isPaid) {
-                              ref.read(billsProvider.notifier).updateBill(
-                                  bill.copyWith(
-                                      isPaid: false,
-                                      lastPaidDate: null));
+                              ref.read(billsProvider.notifier).markAsUnpaid(bill.id);
                             } else {
                               _markBillAsPaid(bill);
                             }
@@ -2678,7 +2658,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
         daysLeft <= bill.reminderDaysBefore && !bill.isPaid;
     final selectedBills = ref.watch(selectedBillsProvider);
     final isSelected = selectedBills.contains(bill.id);
-    final isSelectionMode = selectedBills.isNotEmpty;
+    final isSelectionMode = selectedBills.isNotEmpty || ref.watch(isSelectionModeProvider);
 
     Color statusColor;
     String statusText;
@@ -2881,8 +2861,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                 title: const Text('Mark as Unpaid'),
                 onTap: () {
                   Navigator.pop(ctx);
-                  ref.read(billsProvider.notifier).updateBill(
-                      bill.copyWith(isPaid: false, lastPaidDate: null));
+                  ref.read(billsProvider.notifier).markAsUnpaid(bill.id);
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                       content: Text('${bill.title} marked as unpaid'),
                       duration: const Duration(milliseconds: 1500)));
@@ -2905,15 +2884,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                 final updated =
                 bill.copyWith(reminderEnabled: !bill.reminderEnabled);
                 ref.read(billsProvider.notifier).updateBill(updated);
-                await NotificationService().scheduleBillNotifications(
-                  billId: updated.id,
-                  title: 'Bill Reminder: ${updated.title}',
-                  dueDay: updated.dueDate,
-                  reminderDaysBeforeList: updated.reminderDaysBeforeList,
-                  hour: updated.reminderHour,
-                  minute: updated.reminderMinute,
-                  enabled: updated.reminderEnabled,
-                );
+                await NotificationService().scheduleBillNotificationsFor(updated);
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                     content: Text(updated.reminderEnabled
@@ -2955,15 +2926,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                       TextButton(
                         onPressed: () {
                           Navigator.pop(c);
-                          ref
-                              .read(billsProvider.notifier)
-                              .deleteBill(bill.id);
-                          NotificationService()
-                              .cancelBillNotifications(bill.id);
-                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                              content: Text('${bill.title} deleted'),
-                              duration:
-                              const Duration(milliseconds: 1500)));
+                          deleteBillsWithUndo(context, ref, [bill]);
                         },
                         child: const Text('Delete',
                             style: TextStyle(color: Colors.red)),

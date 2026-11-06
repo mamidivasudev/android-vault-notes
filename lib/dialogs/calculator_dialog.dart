@@ -16,6 +16,14 @@ class _CalculatorDialogState extends State<CalculatorDialog> {
 
   void _onDigitPress(String digit) {
     setState(() {
+      if (_display == 'Error') _display = '0';
+      // Only one decimal point per number.
+      if (digit == '.' && !_shouldResetDisplay && _display.contains('.')) return;
+      if (digit == '.' && (_display == '0' || _shouldResetDisplay)) {
+        _display = '0.';
+        _shouldResetDisplay = false;
+        return;
+      }
       if (_display == '0' || _shouldResetDisplay) {
         _display = digit;
         _shouldResetDisplay = false;
@@ -51,10 +59,13 @@ class _CalculatorDialogState extends State<CalculatorDialog> {
       case '×': result = _firstOperand! * secondOperand; break;
       case '÷': 
         if (secondOperand == 0) {
-          _display = 'Error';
-          _firstOperand = null;
-          _operator = null;
-          _expression = '';
+          setState(() {
+            _display = 'Error';
+            _firstOperand = null;
+            _operator = null;
+            _expression = '';
+            _shouldResetDisplay = true;
+          });
           return;
         }
         result = _firstOperand! / secondOperand; 
@@ -179,7 +190,11 @@ class _CalculatorDialogState extends State<CalculatorDialog> {
                 _clear();
               } else if (label == '⌫') _backspace();
               else if (label == '=') _onCalculate();
-              else if (label == 'OK') Navigator.pop(context, _display);
+              else if (label == 'OK') {
+                // Finish a pending operation (e.g. "5 + 3" then OK) before returning.
+                if (_operator != null && !_shouldResetDisplay) _onCalculate();
+                Navigator.pop(context, _display);
+              }
               else if (['+', '-', '×', '÷'].contains(label)) _onOperatorPress(label);
               else _onDigitPress(label);
             },

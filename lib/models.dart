@@ -6,10 +6,14 @@ class Note {
   final String content;
   final String category;
   final DateTime createdAt;
+  final DateTime? updatedAt; // last time the title/content/category was edited
   final bool isLocked;
   final bool isPinned;
   final bool isFavorite;
   final int orderIndex;
+  final int colorIndex; // 0 = default, see NoteColors in widgets/note_card.dart
+  final bool isChecklist; // content is stored as "[ ] item" / "[x] item" lines
+  final DateTime? deletedAt; // set when moved to the Recycle Bin
 
   Note({
     String? id,
@@ -17,12 +21,19 @@ class Note {
     required this.content,
     required this.category,
     DateTime? createdAt,
+    this.updatedAt,
     this.isLocked = false,
     this.isPinned = false,
     this.isFavorite = false,
     this.orderIndex = 0,
+    this.colorIndex = 0,
+    this.isChecklist = false,
+    this.deletedAt,
   })  : id = id ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now();
+
+  /// The most recent of created / edited time.
+  DateTime get lastModified => updatedAt ?? createdAt;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -30,22 +41,30 @@ class Note {
         'content': content,
         'category': category,
         'createdAt': createdAt.toIso8601String(),
+        if (updatedAt != null) 'updatedAt': updatedAt!.toIso8601String(),
         'isLocked': isLocked,
         'isPinned': isPinned,
         'isFavorite': isFavorite,
         'orderIndex': orderIndex,
+        if (colorIndex != 0) 'colorIndex': colorIndex,
+        if (isChecklist) 'isChecklist': true,
+        if (deletedAt != null) 'deletedAt': deletedAt!.toIso8601String(),
       };
 
   factory Note.fromJson(Map<String, dynamic> json) => Note(
-        id: json['id'],
+        id: json['id']?.toString(),
         title: json['title'] ?? '',
         content: json['content'] ?? '',
         category: json['category'] ?? 'General',
         createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? json['updatedAt']?.toString() ?? '') ?? DateTime.now(),
+        updatedAt: json['updatedAt'] != null ? DateTime.tryParse(json['updatedAt'].toString()) : null,
         isLocked: json['isLocked'] == true,
         isPinned: json['isPinned'] == true,
         isFavorite: json['isFavorite'] == true,
-        orderIndex: json['orderIndex'] ?? 0,
+        orderIndex: (json['orderIndex'] as num?)?.toInt() ?? 0,
+        colorIndex: (json['colorIndex'] as num?)?.toInt() ?? 0,
+        isChecklist: json['isChecklist'] == true,
+        deletedAt: json['deletedAt'] != null ? DateTime.tryParse(json['deletedAt'].toString()) : null,
       );
 
   Note copyWith({
@@ -53,10 +72,14 @@ class Note {
     String? content,
     String? category,
     DateTime? createdAt,
+    Object? updatedAt = _sentinel,
     bool? isLocked,
     bool? isPinned,
     bool? isFavorite,
     int? orderIndex,
+    int? colorIndex,
+    bool? isChecklist,
+    Object? deletedAt = _sentinel,
   }) =>
       Note(
         id: id,
@@ -64,11 +87,41 @@ class Note {
         content: content ?? this.content,
         category: category ?? this.category,
         createdAt: createdAt ?? this.createdAt,
+        updatedAt: updatedAt == _sentinel ? this.updatedAt : updatedAt as DateTime?,
         isLocked: isLocked ?? this.isLocked,
         isPinned: isPinned ?? this.isPinned,
         isFavorite: isFavorite ?? this.isFavorite,
         orderIndex: orderIndex ?? this.orderIndex,
+        colorIndex: colorIndex ?? this.colorIndex,
+        isChecklist: isChecklist ?? this.isChecklist,
+        deletedAt: deletedAt == _sentinel ? this.deletedAt : deletedAt as DateTime?,
       );
+}
+
+/// One line of a checklist note.
+class ChecklistItem {
+  final String text;
+  final bool checked;
+  const ChecklistItem(this.text, this.checked);
+
+  static final _pattern = RegExp(r'^\[( |x|X)\] ?(.*)$');
+
+  static List<ChecklistItem> parse(String content) {
+    if (content.isEmpty) return [];
+    return content.split('\n').map((line) {
+      final m = _pattern.firstMatch(line);
+      if (m == null) return ChecklistItem(line, false);
+      return ChecklistItem(m.group(2) ?? '', m.group(1)!.toLowerCase() == 'x');
+    }).toList();
+  }
+
+  static String serialize(List<ChecklistItem> items) =>
+      items.map((i) => '[${i.checked ? 'x' : ' '}] ${i.text}').join('\n');
+
+  /// Converts plain text lines to checklist lines (and back).
+  static String fromPlainText(String text) => serialize(
+      text.split('\n').where((l) => l.trim().isNotEmpty).map((l) => ChecklistItem(l.trim(), false)).toList());
+  static String toPlainText(String content) => parse(content).map((i) => i.text).join('\n');
 }
 
 class Expense {
@@ -83,6 +136,7 @@ class Expense {
   final bool isPinned;
   final bool isFavorite;
   final int orderIndex;
+  final DateTime? deletedAt; // set when moved to the Recycle Bin
 
   Expense({
     String? id,
@@ -96,6 +150,7 @@ class Expense {
     this.isPinned = false,
     this.isFavorite = false,
     this.orderIndex = 0,
+    this.deletedAt,
   }) : id = id ?? const Uuid().v4();
 
   Map<String, dynamic> toJson() => {
@@ -110,12 +165,13 @@ class Expense {
         'isPinned': isPinned,
         'isFavorite': isFavorite,
         'orderIndex': orderIndex,
+        if (deletedAt != null) 'deletedAt': deletedAt!.toIso8601String(),
       };
 
   factory Expense.fromJson(Map<String, dynamic> json) => Expense(
         id: json['id'],
         title: json['title'] ?? '',
-        amount: (json['amount'] ?? 0).toDouble(),
+        amount: (json['amount'] is num) ? (json['amount'] as num).toDouble() : (double.tryParse(json['amount']?.toString() ?? '') ?? 0),
         category: json['category'] ?? 'General',
         date: DateTime.tryParse(json['date']?.toString() ?? '') ?? DateTime.now(),
         type: json['type'] ?? 'Out',
@@ -123,7 +179,8 @@ class Expense {
         isLocked: json['isLocked'] == true,
         isPinned: json['isPinned'] == true,
         isFavorite: json['isFavorite'] == true,
-        orderIndex: json['orderIndex'] ?? 0,
+        orderIndex: (json['orderIndex'] as num?)?.toInt() ?? 0,
+        deletedAt: json['deletedAt'] != null ? DateTime.tryParse(json['deletedAt'].toString()) : null,
       );
 
   Expense copyWith({
@@ -137,6 +194,7 @@ class Expense {
     bool? isPinned,
     bool? isFavorite,
     int? orderIndex,
+    Object? deletedAt = _sentinel,
   }) =>
       Expense(
         id: id,
@@ -150,6 +208,7 @@ class Expense {
         isPinned: isPinned ?? this.isPinned,
         isFavorite: isFavorite ?? this.isFavorite,
         orderIndex: orderIndex ?? this.orderIndex,
+        deletedAt: deletedAt == _sentinel ? this.deletedAt : deletedAt as DateTime?,
       );
 }
 
@@ -163,6 +222,7 @@ class LinkItem {
   final bool isPinned;
   final bool isFavorite;
   final int orderIndex;
+  final DateTime? deletedAt; // set when moved to the Recycle Bin
 
   LinkItem({
     String? id,
@@ -174,6 +234,7 @@ class LinkItem {
     this.isPinned = false,
     this.isFavorite = false,
     this.orderIndex = 0,
+    this.deletedAt,
   })  : id = id ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now();
 
@@ -187,6 +248,7 @@ class LinkItem {
         'isPinned': isPinned,
         'isFavorite': isFavorite,
         'orderIndex': orderIndex,
+        if (deletedAt != null) 'deletedAt': deletedAt!.toIso8601String(),
       };
 
   factory LinkItem.fromJson(Map<String, dynamic> json) => LinkItem(
@@ -198,7 +260,8 @@ class LinkItem {
         isLocked: json['isLocked'] == true,
         isPinned: json['isPinned'] == true,
         isFavorite: json['isFavorite'] == true,
-        orderIndex: json['orderIndex'] ?? 0,
+        orderIndex: (json['orderIndex'] as num?)?.toInt() ?? 0,
+        deletedAt: json['deletedAt'] != null ? DateTime.tryParse(json['deletedAt'].toString()) : null,
       );
 
   LinkItem copyWith({
@@ -210,6 +273,7 @@ class LinkItem {
     bool? isPinned,
     bool? isFavorite,
     int? orderIndex,
+    Object? deletedAt = _sentinel,
   }) =>
       LinkItem(
         id: id,
@@ -221,6 +285,7 @@ class LinkItem {
         isPinned: isPinned ?? this.isPinned,
         isFavorite: isFavorite ?? this.isFavorite,
         orderIndex: orderIndex ?? this.orderIndex,
+        deletedAt: deletedAt == _sentinel ? this.deletedAt : deletedAt as DateTime?,
       );
 }
 
@@ -347,7 +412,7 @@ class VaultTable {
         isPinned: json['isPinned'] == true,
         isLocked: json['isLocked'] == true,
         isFavorite: json['isFavorite'] == true,
-        orderIndex: json['orderIndex'] ?? 0,
+        orderIndex: (json['orderIndex'] as num?)?.toInt() ?? 0,
       );
 
   VaultTable copyWith({
@@ -378,94 +443,6 @@ class VaultTable {
       );
 }
 
-class VaultCard {
-  final String id;
-  final String bankName;
-  final String cardType; // Credit Card, Debit Card
-  final String cardNumber;
-  final String expiryDate;
-  final String cvv;
-  final String holderName;
-  final String category;
-  final DateTime createdAt;
-  final bool isPinned;
-  final bool isLocked;
-  final String? cardColor;
-
-  VaultCard({
-    String? id,
-    required this.bankName,
-    required this.cardType,
-    required this.cardNumber,
-    required this.expiryDate,
-    required this.cvv,
-    this.holderName = '',
-    this.category = 'All Cards',
-    DateTime? createdAt,
-    this.isPinned = false,
-    this.isLocked = true,
-    this.cardColor,
-  })  : id = id ?? const Uuid().v4(),
-        createdAt = createdAt ?? DateTime.now();
-
-  VaultCard copyWith({
-    String? bankName,
-    String? cardType,
-    String? cardNumber,
-    String? expiryDate,
-    String? cvv,
-    String? holderName,
-    String? category,
-    bool? isPinned,
-    bool? isLocked,
-    String? cardColor,
-  }) {
-    return VaultCard(
-      id: id,
-      bankName: bankName ?? this.bankName,
-      cardType: cardType ?? this.cardType,
-      cardNumber: cardNumber ?? this.cardNumber,
-      expiryDate: expiryDate ?? this.expiryDate,
-      cvv: cvv ?? this.cvv,
-      holderName: holderName ?? this.holderName,
-      category: category ?? this.category,
-      createdAt: createdAt,
-      isPinned: isPinned ?? this.isPinned,
-      isLocked: isLocked ?? this.isLocked,
-      cardColor: cardColor ?? this.cardColor,
-    );
-  }
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'bankName': bankName,
-        'cardType': cardType,
-        'cardNumber': cardNumber,
-        'expiryDate': expiryDate,
-        'cvv': cvv,
-        'holderName': holderName,
-        'category': category,
-        'createdAt': createdAt.toIso8601String(),
-        'isPinned': isPinned,
-        'isLocked': isLocked,
-        'cardColor': cardColor,
-      };
-
-  factory VaultCard.fromJson(Map<String, dynamic> json) => VaultCard(
-        id: json['id']?.toString(),
-        bankName: json['bankName']?.toString() ?? '',
-        cardType: json['cardType']?.toString() ?? 'Debit Card',
-        cardNumber: json['cardNumber']?.toString() ?? '',
-        expiryDate: json['expiryDate']?.toString() ?? '',
-        cvv: json['cvv']?.toString() ?? '',
-        holderName: json['holderName']?.toString() ?? '',
-        category: json['category']?.toString() ?? 'All Cards',
-        createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? '') ?? DateTime.now(),
-        isPinned: json['isPinned'] == true,
-        isLocked: json['isLocked'] == true,
-        cardColor: json['cardColor']?.toString(),
-      );
-}
 
 class Reminder {
   final String id;
@@ -601,26 +578,26 @@ class Bill {
   factory Bill.fromJson(Map<String, dynamic> json) {
     final list = json['reminderDaysBeforeList'] as List<dynamic>?;
     final List<int> parsedList = list != null
-        ? list.map((e) => e as int).toList()
-        : [json['reminderDaysBefore'] as int? ?? 2];
+        ? list.whereType<num>().map((e) => e.toInt()).toList()
+        : [(json['reminderDaysBefore'] as num?)?.toInt() ?? 2];
 
     return Bill(
         id: json['id']?.toString(),
         title: json['title']?.toString() ?? '',
-        amount: (json['amount'] ?? 0.0).toDouble(),
-        dueDate: json['dueDate'] as int? ?? 1,
-        reminderDaysBefore: json['reminderDaysBefore'] as int? ?? 2,
+        amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
+        dueDate: ((json['dueDate'] as num?)?.toInt() ?? 1).clamp(1, 31),
+        reminderDaysBefore: (json['reminderDaysBefore'] as num?)?.toInt() ?? 2,
         reminderDaysBeforeList: parsedList,
-        reminderHour: json['reminderHour'] as int? ?? 9,
-        reminderMinute: json['reminderMinute'] as int? ?? 0,
+        reminderHour: (json['reminderHour'] as num?)?.toInt() ?? 9,
+        reminderMinute: (json['reminderMinute'] as num?)?.toInt() ?? 0,
         isPaid: json['isPaid'] == true,
         lastPaidDate: json['lastPaidDate'] != null ? DateTime.tryParse(json['lastPaidDate'].toString()) : null,
         reminderEnabled: json['reminderEnabled'] ?? true,
         type: json['type']?.toString() ?? 'Credit Card',
         note: json['note']?.toString(),
         totalLoanAmount: json['totalLoanAmount'] != null ? (json['totalLoanAmount'] as num).toDouble() : null,
-        totalEmis: json['totalEmis'] as int?,
-        paidEmis: json['paidEmis'] as int?,
+        totalEmis: (json['totalEmis'] as num?)?.toInt(),
+        paidEmis: (json['paidEmis'] as num?)?.toInt(),
         lastEmiPaidMonth: json['lastEmiPaidMonth']?.toString(),
         interestRate: json['interestRate'] != null ? (json['interestRate'] as num).toDouble() : null,
         emiAmount: json['emiAmount'] != null ? (json['emiAmount'] as num).toDouble() : null,
@@ -636,7 +613,7 @@ class Bill {
     int? reminderHour,
     int? reminderMinute,
     bool? isPaid,
-    DateTime? lastPaidDate,
+    Object? lastPaidDate = _sentinel,
     bool? reminderEnabled,
     String? type,
     String? note,
@@ -657,7 +634,7 @@ class Bill {
         reminderHour: reminderHour ?? this.reminderHour,
         reminderMinute: reminderMinute ?? this.reminderMinute,
         isPaid: isPaid ?? this.isPaid,
-        lastPaidDate: lastPaidDate ?? this.lastPaidDate,
+        lastPaidDate: lastPaidDate == _sentinel ? this.lastPaidDate : lastPaidDate as DateTime?,
         reminderEnabled: reminderEnabled ?? this.reminderEnabled,
         type: type ?? this.type,
         note: note ?? this.note,
@@ -670,6 +647,48 @@ class Bill {
       );
 }
 
+extension BillCycle on Bill {
+  /// Billing cycle ('yyyy-MM' of the due date) the last payment covered.
+  /// A payment covers the due date nearest to when it was made, so paying a
+  /// bill due on the 2nd on the 30th of the previous month counts for the 2nd.
+  String? get paidCycle {
+    if (lastPaidDate != null) return billCycleKey(billCycleDueFor(lastPaidDate!, dueDate));
+    return lastEmiPaidMonth;
+  }
+
+  /// Cycle that is "current" at [when]: the due date nearest to it.
+  String currentCycle([DateTime? when]) => billCycleKey(billCycleDueFor(when ?? DateTime.now(), dueDate));
+
+  /// True when the bill was paid for the cycle that is current at [when].
+  bool isPaidForCycle([DateTime? when]) => isPaid && paidCycle == currentCycle(when);
+}
+
+/// The due date of a bill in [year]/[month], clamped to the month's length
+/// (a bill due on the 31st is due on the 28th/29th in February).
+DateTime billDueDate(int year, int month, int dueDay) {
+  final daysInMonth = DateTime(year, month + 1, 0).day;
+  final first = DateTime(year, month, 1); // normalises month 0 / 13
+  return DateTime(first.year, first.month, dueDay.clamp(1, daysInMonth));
+}
+
+String billCycleKey(DateTime due) => '${due.year}-${due.month.toString().padLeft(2, '0')}';
+
+/// The due date closest to [when] (ties go to the upcoming one).
+DateTime billCycleDueFor(DateTime when, int dueDay) {
+  final day = DateTime(when.year, when.month, when.day);
+  DateTime? best;
+  int bestDiff = 1 << 30;
+  for (final offset in const [-1, 0, 1]) {
+    final due = billDueDate(when.year, when.month + offset, dueDay);
+    final diff = due.difference(day).inDays.abs();
+    if (diff < bestDiff || (diff == bestDiff && due.isAfter(best!))) {
+      best = due;
+      bestDiff = diff;
+    }
+  }
+  return best!;
+}
+
 const _sentinel = Object();
 
 class FuelEntry {
@@ -679,6 +698,9 @@ class FuelEntry {
   final double? liters; // liters filled (null if not a full-tank fill)
   final String? comments; // optional comments
   final bool airFilled;
+  /// Whether the tank was filled to full. Null for entries saved before this
+  /// flag existed (those are treated as full fills, the old behaviour).
+  final bool? isFullTank;
 
   FuelEntry({
     required this.date,
@@ -687,7 +709,11 @@ class FuelEntry {
     this.liters,
     this.comments,
     this.airFilled = false,
+    this.isFullTank,
   });
+
+  /// Odometer 0 means "not recorded".
+  bool get hasOdometer => odometer > 0;
 
   Map<String, dynamic> toJson() => {
         'date': date,
@@ -696,15 +722,53 @@ class FuelEntry {
         'liters': liters,
         'comments': comments,
         'airFilled': airFilled,
+        if (isFullTank != null) 'isFullTank': isFullTank,
       };
 
   factory FuelEntry.fromJson(Map<String, dynamic> json) => FuelEntry(
-        date: json['date'],
-        odometer: (json['odometer'] as num).toDouble(),
-        rupees: (json['rupees'] as num).toDouble(),
-        liters: json['liters'] == null ? null : (json['liters'] as num).toDouble(),
-        comments: json['comments'] as String?,
-        airFilled: json['airFilled'] as bool? ?? false,
+        date: json['date']?.toString() ?? '',
+        odometer: (json['odometer'] as num?)?.toDouble() ?? 0,
+        rupees: (json['rupees'] as num?)?.toDouble() ?? 0,
+        liters: (json['liters'] as num?)?.toDouble(),
+        comments: json['comments']?.toString(),
+        airFilled: json['airFilled'] == true,
+        isFullTank: json['isFullTank'] is bool ? json['isFullTank'] as bool : null,
+      );
+}
+
+class ServiceEntry {
+  final String id;
+  final String date; // stored as yyyy-MM-dd
+  final double odometer; // km reading at time of service
+  final double cost; // amount paid for the service
+  final double nextServiceOdometer; // expected km for next service
+  final String? comments; // optional comments (what was done)
+
+  ServiceEntry({
+    required this.id,
+    required this.date,
+    required this.odometer,
+    required this.cost,
+    required this.nextServiceOdometer,
+    this.comments,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'date': date,
+        'odometer': odometer,
+        'cost': cost,
+        'nextServiceOdometer': nextServiceOdometer,
+        'comments': comments,
+      };
+
+  factory ServiceEntry.fromJson(Map<String, dynamic> json) => ServiceEntry(
+        id: json['id']?.toString() ?? const Uuid().v4(),
+        date: json['date']?.toString() ?? '',
+        odometer: (json['odometer'] as num?)?.toDouble() ?? 0,
+        cost: (json['cost'] as num?)?.toDouble() ?? 0,
+        nextServiceOdometer: (json['nextServiceOdometer'] as num?)?.toDouble() ?? 0,
+        comments: json['comments']?.toString(),
       );
 }
 
@@ -731,10 +795,10 @@ class GroceryItem {
       };
 
   factory GroceryItem.fromJson(Map<String, dynamic> json) => GroceryItem(
-        id: json['id'],
-        name: json['name'],
-        isPurchased: json['isPurchased'] ?? false,
-        createdAt: DateTime.parse(json['createdAt']),
+        id: json['id']?.toString(),
+        name: json['name']?.toString() ?? '',
+        isPurchased: json['isPurchased'] == true,
+        createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? ''),
       );
 
   GroceryItem copyWith({

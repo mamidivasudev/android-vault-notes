@@ -86,8 +86,15 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen> {
           TextButton(
             onPressed: () {
               final newName = _categoryController.text.trim();
+              final provider = Provider.of<DocumentProvider>(context, listen: false);
+              if (newName.isNotEmpty && newName != oldName && provider.categories.contains(newName)) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('A category named "$newName" already exists')),
+                );
+                return;
+              }
               if (newName.isNotEmpty && newName != oldName) {
-                Provider.of<DocumentProvider>(context, listen: false).editCategory(oldName, newName);
+                provider.editCategory(oldName, newName);
               }
               Navigator.pop(context);
             },

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models.dart';
 import '../providers.dart';
+import '../utils/undo_helpers.dart';
 import '../profiles/providers/theme_provider.dart';
 
 class GroceryView extends ConsumerStatefulWidget {
@@ -22,7 +24,6 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
   bool _hideSuggestions = false;
 
   @override
-  @override
   void initState() {
     super.initState();
     _itemController.addListener(() {
@@ -41,15 +42,24 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
     super.dispose();
   }
 
-  void _add() {
-    final text = _itemController.text.trim();
+  Future<void> _add() async {
+    String text = _itemController.text.trim();
     if (text.isNotEmpty) {
       String finalItem = text;
       
       final qty = _qtyController.text.trim();
       final unit = _selectedUnit == '-' ? '' : _selectedUnit;
 
-      if (qty.isNotEmpty || unit.isNotEmpty) {
+      if (qty.isEmpty && unit.isEmpty) {
+        // Smart parse: Look for quantity at the end of the string
+        final smartMatch = RegExp(r'^(.*?)\s+((?:\d*\.?\d+|\d+\/\d+|half|quarter)?\s*(?:kg|kilograms|g|grams|l|liter|liters|ml|packet|packets|piece|pieces|dozen|rupees|pc|pcs|pack|packs|bottle|bottles|box|boxes))$', caseSensitive: false).firstMatch(text);
+        if (smartMatch != null) {
+          final extractedName = smartMatch.group(1)!.trim();
+          final extractedQty = smartMatch.group(2)!.trim();
+          finalItem = '$extractedName ($extractedQty)';
+        }
+      } else {
+        // Use explicit inputs
         final parts = <String>[];
         if (qty.isNotEmpty) parts.add(qty);
         if (unit.isNotEmpty) parts.add(unit);
@@ -59,7 +69,9 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
         }
       }
       
-      ref.read(groceryProvider.notifier).addItem(finalItem);
+      final messenger = ScaffoldMessenger.of(context);
+      final result = await ref.read(groceryProvider.notifier).addItem(finalItem);
+      if (!mounted) return;
       _itemController.clear();
       _qtyController.clear();
       setState(() { 
@@ -77,17 +89,22 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       scrollBottom(_scrollToBuy);
     });
       
-      ScaffoldMessenger.of(context).clearSnackBars();
-      ScaffoldMessenger.of(context).showSnackBar(
+      final message = switch (result) {
+        GroceryAddResult.added => 'Item saved',
+        GroceryAddResult.alreadyOnList => 'Already on your list',
+        GroceryAddResult.movedBack => 'Moved back to "To buy"',
+        GroceryAddResult.ignored => null,
+      };
+      if (message == null) return;
+      messenger.clearSnackBars();
+      // A normal floating snackbar: the old fixed "screen height − 200" margin
+      // pushed it off screen while the keyboard was open.
+      messenger.showSnackBar(
         SnackBar(
-          content: const Text('Item saved', textAlign: TextAlign.center),
+          content: Text(message, textAlign: TextAlign.center),
           duration: const Duration(seconds: 1),
           behavior: SnackBarBehavior.floating,
-          margin: EdgeInsets.only(
-            bottom: MediaQuery.of(context).size.height - 200, 
-            left: 60, 
-            right: 60
-          ),
+          margin: const EdgeInsets.symmetric(horizontal: 60, vertical: 12),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
         ),
       );
@@ -133,10 +150,8 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
               TextButton(
                 onPressed: () {
-                  if (selectedIds.isNotEmpty) {
-                    ref.read(groceryProvider.notifier).deleteMultiple(selectedIds);
-                  }
                   Navigator.pop(context);
+                  deleteGroceryWithUndo(this.context, ref, selectedIds);
                 },
                 child: const Text('Delete', style: TextStyle(color: Colors.red)),
               ),
@@ -171,6 +186,12 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       }
     }
 
+    const editUnits = ['-', 'kg', 'half kg', 'grams', '1/4 kg', 'liter', 'ml', 'packet', 'piece', 'dozen', 'rupees'];
+    if (!editUnits.contains(parsedUnit)) {
+      // Keep the text as quantity instead of selecting a unit the dropdown can't show.
+      if (parsedUnit != '-') parsedQty = '$parsedQty $parsedUnit'.trim();
+      parsedUnit = '-';
+    }
     final editNameController = TextEditingController(text: parsedName);
     if (parsedQty == '-') parsedQty = '';
     final editQtyController = TextEditingController(text: parsedQty);
@@ -207,7 +228,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
                           child: DropdownButton<String>(
                             value: currentUnit,
                             isExpanded: true,
-                            items: ['-', 'kg', 'half kg', 'grams', '1/4 kg', 'liter', 'ml', 'packet', 'piece', 'dozen', 'rupees']
+                            items: editUnits
                                 .map((u) => DropdownMenuItem(value: u, child: Text(u)))
                                 .toList(),
                             onChanged: (val) {
@@ -393,13 +414,15 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
               children: [
                 Expanded(
                   child: TabBar(
+                    isScrollable: true,
+                    tabAlignment: TabAlignment.start,
                     labelColor: isDark ? Colors.white : Colors.black87,
                     unselectedLabelColor: isDark ? Colors.white30 : Colors.black38,
                     indicatorColor: Colors.blue,
                     labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                     tabs: [
                       Tab(text: 'ALL (${items.length})'),
-                      Tab(text: 'TO BUY (${pending.length})'),
+                      Tab(text: 'NOT PURCHASED (${pending.length})'),
                       Tab(text: 'PURCHASED (${purchased.length})'),
                     ],
                   ),
@@ -409,8 +432,6 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
                   onSelected: (value) {
                     if (value == 'MasterList') {
                       Navigator.push(context, MaterialPageRoute(builder: (_) => const GroceryMasterListView()));
-                    } else if (value == 'Delete') {
-                      _showDeleteDialog();
                     } else {
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$value coming soon')));
                     }
@@ -418,8 +439,6 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
                   itemBuilder: (context) {
                     return const [
                       PopupMenuItem(value: 'MasterList', child: Text('Master List')),
-                      PopupMenuDivider(),
-                      PopupMenuItem(value: 'Delete', child: Text('Delete Items', style: TextStyle(color: Colors.red))),
                       PopupMenuDivider(),
                       PopupMenuItem(value: 'Share', child: Text('Share List')),
                       PopupMenuItem(value: 'Export', child: Text('Export List')),
@@ -575,7 +594,18 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       displayQty = match.group(2)!;
     }
 
+    final selectedItems = ref.watch(selectedGroceryProvider);
+    final isSelectionMode = selectedItems.isNotEmpty || ref.watch(isSelectionModeProvider);
+    final isSelected = selectedItems.contains(item.id);
+
     return ListTile(
+      leading: isSelectionMode ? Checkbox(
+        value: isSelected,
+        onChanged: (val) {
+          ref.read(selectedGroceryProvider.notifier).toggle(item.id);
+        },
+      ) : null,
+      selected: isSelected,
       title: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -628,7 +658,17 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
         ],
       ),
       onTap: () {
-        ref.read(groceryProvider.notifier).toggleItem(item.id);
+        if (isSelectionMode) {
+          ref.read(selectedGroceryProvider.notifier).toggle(item.id);
+        } else {
+          ref.read(groceryProvider.notifier).toggleItem(item.id);
+        }
+      },
+      onLongPress: () {
+        if (!isSelectionMode) {
+          ref.read(isSelectionModeProvider.notifier).setState(true);
+          ref.read(selectedGroceryProvider.notifier).toggle(item.id);
+        }
       },
     );
   }
@@ -705,6 +745,7 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
             padding: const EdgeInsets.all(8.0),
             child: TextField(
               controller: _searchController,
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
                 hintText: 'Search catalog...',
                 filled: true,

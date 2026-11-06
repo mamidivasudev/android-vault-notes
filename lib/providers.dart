@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'models.dart';
+import 'profiles/providers/profile_provider.dart' show profilesProvider;
 import 'vault_service.dart';
 import 'services/google_drive_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,6 +11,7 @@ import 'dart:convert';
 import 'docs_feature/services/google_drive_service.dart' as docs_drive;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'notification_service.dart';
+import 'docs_feature/providers/document_provider.dart';
 
 final vaultServiceProvider = Provider((ref) => VaultService());
 
@@ -58,21 +60,80 @@ class ExpenseBudgetNotifier extends Notifier<Map<String, double>> {
   }
 
   Future<void> setBudget(String category, double limit) async {
-    final newState = {...state, category: limit};
-    state = newState;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('expense_budgets', json.encode(newState));
+    await _persist({...state, category: limit});
   }
 
   Future<void> clearBudget(String category) async {
-    final newState = {...state}..remove(category);
+    await _persist({...state}..remove(category));
+  }
+
+  /// Keeps a category's budget when the category is renamed.
+  Future<void> renameCategory(String oldName, String newName) async {
+    if (!state.containsKey(oldName)) return;
+    final next = {...state};
+    final limit = next.remove(oldName)!;
+    next[newName] = limit;
+    await _persist(next);
+  }
+
+  Future<void> _persist(Map<String, double> newState) async {
     state = newState;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('expense_budgets', json.encode(newState));
+    // Budgets live in SharedPreferences; mirror them into the vault right away
+    // so local folder sync and Drive backups always carry the latest values.
+    await ref.read(vaultServiceProvider).exportAppSettings();
   }
 }
 
-enum NoteSortOrder { dateNewest, dateOldest, atoz, ztoa, manual }
+enum NoteSortOrder { dateNewest, dateOldest, atoz, ztoa, manual, modifiedNewest }
+
+/// Small persisted bool setting backed by SharedPreferences.
+abstract class _PersistedBoolNotifier extends Notifier<bool> {
+  String get prefsKey;
+  bool get defaultValue => false;
+
+  @override
+  bool build() {
+    _load();
+    return defaultValue;
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getBool(prefsKey);
+    if (v != null && v != state) super.state = v;
+  }
+
+  @override
+  set state(bool value) {
+    super.state = value;
+    SharedPreferences.getInstance().then((p) => p.setBool(prefsKey, value));
+  }
+}
+
+class NotesGridViewNotifier extends _PersistedBoolNotifier {
+  @override
+  String get prefsKey => 'notes_grid_view';
+}
+final notesGridViewProvider = NotifierProvider<NotesGridViewNotifier, bool>(NotesGridViewNotifier.new);
+
+class NotesSearchInCategoryNotifier extends _PersistedBoolNotifier {
+  @override
+  String get prefsKey => 'notes_search_current_category';
+}
+final notesSearchInCategoryProvider = NotifierProvider<NotesSearchInCategoryNotifier, bool>(NotesSearchInCategoryNotifier.new);
+
+/// Swipe a note card right to pin / left to delete. While on, swiping
+/// sideways no longer switches categories (the gestures would clash).
+class NotesSwipeActionsNotifier extends _PersistedBoolNotifier {
+  @override
+  String get prefsKey => 'notes_swipe_actions';
+}
+final notesSwipeActionsProvider = NotifierProvider<NotesSwipeActionsNotifier, bool>(NotesSwipeActionsNotifier.new);
+
+/// Reminder id used for the reminder attached to a note.
+String noteReminderId(String noteId) => 'note_$noteId';
 enum ExpenseSortOrder { dateNewest, dateOldest, amountHighest, amountLowest, atoz, ztoa }
 
 class SearchQueryNotifier extends Notifier<String> {
@@ -333,7 +394,8 @@ class SecurityLockEnabledNotifier extends Notifier<bool> {
   @override
   bool build() {
     _load();
-    return false; // Disabled by default!
+    // Must match verifyPasscode(), which treats a missing value as enabled.
+    return true;
   }
 
   Future<void> _load() async {
@@ -384,15 +446,19 @@ class NotesNotifier extends Notifier<List<Note>> {
     }
   }
 
-  Future<void> addNote(Note note) async {
+  /// Adds [note]. Returns false if it was skipped.
+  /// A note whose id already exists is always skipped. With [dedupe] (used by
+  /// imports) a note with identical title and content is skipped as well.
+  Future<bool> addNote(Note note, {bool dedupe = false}) async {
     await _initFuture;
-    // Deduplication: check if same title and content exists
-    if (state.any((n) => n.title == note.title && n.content == note.content)) return;
+    if (state.any((n) => n.id == note.id)) return false;
+    if (dedupe && state.any((n) => n.title == note.title && n.content == note.content)) return false;
 
     // Add to end of manual order
     final newOrder = state.isEmpty ? 0 : state.map((n) => n.orderIndex).reduce((a, b) => a > b ? a : b) + 1;
     state = [...state, note.copyWith(orderIndex: newOrder)];
     _save();
+    return true;
   }
 
   Future<void> updateNote(Note note) async {
@@ -410,12 +476,49 @@ class NotesNotifier extends Notifier<List<Note>> {
 
   Future<void> deleteNotes(List<String> ids) async {
     await _initFuture;
-    final deletedNotes = state.where((n) => ids.contains(n.id)).toList();
+    final now = DateTime.now();
+    final deletedNotes = state.where((n) => ids.contains(n.id)).map((n) => n.copyWith(deletedAt: now)).toList();
     state = state.where((n) => !ids.contains(n.id)).toList();
     
     // Add to recycle bin
     ref.read(deletedNotesProvider.notifier).addNotes(deletedNotes);
-    
+
+    // Drop any reminders attached to these notes
+    final reminderIds = ids.map(noteReminderId).toSet();
+    final attached = ref.read(remindersProvider).where((r) => reminderIds.contains(r.id)).map((r) => r.id).toList();
+    if (attached.isNotEmpty) ref.read(remindersProvider.notifier).deleteReminders(attached);
+
+    _save();
+  }
+
+  /// Renames a category on every note in it with a single save.
+  Future<void> renameCategoryInNotes(String oldName, String newName) async {
+    await _initFuture;
+    if (!state.any((n) => n.category == oldName)) return;
+    state = [
+      for (final n in state)
+        if (n.category == oldName) n.copyWith(category: newName) else n
+    ];
+    _save();
+  }
+
+  /// Puts notes back from the Recycle Bin. Unlike [addNote] this does not apply
+  /// the title/content de-duplication, so a restored note is never silently dropped.
+  Future<void> restoreNotes(List<Note> notes) async {
+    await _initFuture;
+    final existingIds = state.map((n) => n.id).toSet();
+    final usedOrders = state.map((n) => n.orderIndex).toSet();
+    var nextOrder = usedOrders.isEmpty ? 0 : usedOrders.reduce((a, b) => a > b ? a : b) + 1;
+    final toAdd = <Note>[];
+    for (final n in notes) {
+      if (existingIds.contains(n.id)) continue;
+      // Keep the note's old manual position if nothing has taken it since.
+      final order = usedOrders.contains(n.orderIndex) ? nextOrder++ : n.orderIndex;
+      usedOrders.add(order);
+      toAdd.add(n.copyWith(deletedAt: null, orderIndex: order));
+    }
+    if (toAdd.isEmpty) return;
+    state = [...state, ...toAdd];
     _save();
   }
 
@@ -458,6 +561,20 @@ class NotesNotifier extends Notifier<List<Note>> {
     _save();
   }
 
+  /// Applies a new manual order for a subset of notes (e.g. one category),
+  /// keeping every other note in the slots it already had.
+  Future<void> reorderSubset(List<Note> reorderedSubset) async {
+    await _initFuture;
+    final subsetIds = reorderedSubset.map((n) => n.id).toSet();
+    final byOrder = List<Note>.from(state)..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
+    final queue = reorderedSubset.iterator;
+    final merged = <Note>[
+      for (final n in byOrder)
+        if (subsetIds.contains(n.id)) (queue..moveNext()).current else n
+    ];
+    await reorderNotes(merged);
+  }
+
   Future<void> reorderNotes(List<Note> reorderedList) async {
     await _initFuture;
     state = [
@@ -482,8 +599,8 @@ final filteredNotesProvider = Provider.family<List<Note>, String>((ref, category
   final sortOrder = ref.watch(sortOrderProvider);
   final showFavs = ref.watch(showFavoritesOnlyProvider);
 
-  // If searching, we do global search (ignore category)
-  var filtered = query.isNotEmpty
+  // An empty category means "all categories" (used for global search).
+  var filtered = category.isEmpty
     ? notes.toList()
     : notes.where((n) => n.category == category).toList();
 
@@ -495,8 +612,9 @@ final filteredNotesProvider = Provider.family<List<Note>, String>((ref, category
   // Filter by search query
   if (query.isNotEmpty) {
     filtered = filtered.where((n) => 
-      n.title.toLowerCase().contains(query) || 
-      n.content.toLowerCase().contains(query)
+      n.title.toLowerCase().contains(query) ||
+      // Locked notes are only matched by title so their content isn't revealed
+      (!n.isLocked && n.content.toLowerCase().contains(query))
     ).toList();
   }
 
@@ -517,6 +635,8 @@ final filteredNotesProvider = Provider.family<List<Note>, String>((ref, category
         return b.title.toLowerCase().compareTo(a.title.toLowerCase());
       case NoteSortOrder.manual:
         return a.orderIndex.compareTo(b.orderIndex);
+      case NoteSortOrder.modifiedNewest:
+        return b.lastModified.compareTo(a.lastModified);
     }
   });
 
@@ -556,11 +676,24 @@ class ExpensesNotifier extends Notifier<List<Expense>> {
     }
   }
 
-  Future<void> addExpense(Expense expense) async {
+  /// Adds [expense]. Returns false if an identical one (same title, amount
+  /// and date) already exists, so the caller can tell the user.
+  Future<bool> addExpense(Expense expense) async {
     await _initFuture;
-    // Deduplication: check if same title, amount and date exists
-    if (state.any((e) => e.title == expense.title && e.amount == expense.amount && e.date == expense.date)) return;
+    if (state.any((e) => e.id == expense.id ||
+        (e.title == expense.title && e.amount == expense.amount && e.date == expense.date))) {
+      return false;
+    }
     state = [...state, expense];
+    _save();
+    return true;
+  }
+
+  /// Renames a category on every expense in it with a single save.
+  Future<void> renameCategoryInExpenses(String oldName, String newName) async {
+    await _initFuture;
+    if (!state.any((e) => e.category == oldName)) return;
+    state = [for (final e in state) if (e.category == oldName) e.copyWith(category: newName) else e];
     _save();
   }
 
@@ -584,12 +717,24 @@ class ExpensesNotifier extends Notifier<List<Expense>> {
 
   Future<void> deleteExpenses(List<String> ids) async {
     await _initFuture;
-    final deletedExps = state.where((e) => ids.contains(e.id)).toList();
+    final now = DateTime.now();
+    final deletedExps = state.where((e) => ids.contains(e.id)).map((e) => e.copyWith(deletedAt: now)).toList();
     state = state.where((e) => !ids.contains(e.id)).toList();
     
     // Add to recycle bin
     await ref.read(deletedExpensesProvider.notifier).addExpenses(deletedExps);
     
+    _save();
+  }
+
+  /// Puts expenses back from the Recycle Bin without the title/amount/date
+  /// de-duplication used by [addExpense].
+  Future<void> restoreExpenses(List<Expense> expenses) async {
+    await _initFuture;
+    final existingIds = state.map((e) => e.id).toSet();
+    final toAdd = expenses.where((e) => !existingIds.contains(e.id)).map((e) => e.copyWith(deletedAt: null)).toList();
+    if (toAdd.isEmpty) return;
+    state = [...state, ...toAdd];
     _save();
   }
 
@@ -689,15 +834,15 @@ class ExpenseCategoriesNotifier extends Notifier<List<String>> {
 
   Future<void> renameCategory(String oldName, String newName) async {
     await _initFuture;
-    if (oldName == 'All') return;
+    newName = newName.trim();
+    if (oldName == 'All' || newName.isEmpty || newName == 'All' || newName == oldName) return;
+    if (state.contains(newName)) return; // would create a duplicate
     state = [for (final c in state) if (c == oldName) newName else c];
-    
-    final expensesNotifier = ref.read(expensesProvider.notifier);
-    final allExpenses = ref.read(expensesProvider);
-    for (final exp in allExpenses) {
-      if (exp.category == oldName) {
-        await expensesNotifier.moveExpense(exp.id, newName);
-      }
+
+    await ref.read(expensesProvider.notifier).renameCategoryInExpenses(oldName, newName);
+    await ref.read(expenseBudgetProvider.notifier).renameCategory(oldName, newName);
+    if (ref.read(selectedExpenseCategoryProvider) == oldName) {
+      ref.read(selectedExpenseCategoryProvider.notifier).state = newName;
     }
     _save();
   }
@@ -799,17 +944,17 @@ class CategoriesNotifier extends Notifier<List<String>> {
 
   Future<void> renameCategory(String oldName, String newName) async {
     await _initFuture;
+    newName = newName.trim();
     if (oldName == 'General') return; // Don't rename General
-    if (newName == 'All') return;
+    if (newName.isEmpty || newName == 'All' || newName == oldName) return;
+    if (state.contains(newName)) return; // Would create a duplicate category
     state = [for (final c in state) if (c == oldName) newName else c];
-    
-    // Update all notes in this category
-    final notesNotifier = ref.read(notesProvider.notifier);
-    final allNotes = ref.read(notesProvider);
-    for (final note in allNotes) {
-      if (note.category == oldName) {
-        await notesNotifier.updateNote(note.copyWith(category: newName));
-      }
+
+    // Update all notes in this category (single save)
+    await ref.read(notesProvider.notifier).renameCategoryInNotes(oldName, newName);
+
+    if (ref.read(selectedCategoryProvider) == oldName) {
+      ref.read(selectedCategoryProvider.notifier).state = newName;
     }
     _save();
   }
@@ -911,34 +1056,36 @@ class DeletedNotesNotifier extends Notifier<List<Note>> {
 
   Future<void> addNotes(List<Note> notes) async {
     await _initFuture;
-    // Basic deduplication: check if a note with same title and content exists
-    final newNotes = notes.where((newNote) => !state.any((n) => n.title == newNote.title && n.content == newNote.content)).toList();
+    final now = DateTime.now();
+    final existingIds = state.map((n) => n.id).toSet();
+    final newNotes = notes
+        .where((n) => !existingIds.contains(n.id))
+        .map((n) => n.deletedAt == null ? n.copyWith(deletedAt: now) : n)
+        .toList();
     state = [...state, ...newNotes];
     _save();
   }
 
   Future<void> restoreNote(String id) async {
     await _initFuture;
-    final note = state.firstWhere((n) => n.id == id);
-    state = state.where((n) => n.id != id).toList();
-    
+    final idx = state.indexWhere((n) => n.id == id);
+    if (idx == -1) return; // already restored or permanently deleted
+    final note = state[idx];
     // Auto-create category if missing
     await ref.read(categoriesProvider.notifier).addCategory(note.category);
-    
-    await ref.read(notesProvider.notifier).addNote(note);
+    await ref.read(notesProvider.notifier).restoreNotes([note]);
+    state = state.where((n) => n.id != id).toList();
     _save();
   }
 
   Future<void> restoreAll() async {
     await _initFuture;
     final allNotes = List<Note>.from(state);
-    state = [];
-    
-    for (final note in allNotes) {
-      // Auto-create category if missing
-      await ref.read(categoriesProvider.notifier).addCategory(note.category);
-      await ref.read(notesProvider.notifier).addNote(note);
+    for (final cat in allNotes.map((n) => n.category).toSet()) {
+      await ref.read(categoriesProvider.notifier).addCategory(cat);
     }
+    await ref.read(notesProvider.notifier).restoreNotes(allNotes);
+    state = [];
     _save();
   }
 
@@ -980,15 +1127,22 @@ class DeletedExpensesNotifier extends Notifier<List<Expense>> {
 
   Future<void> addExpenses(List<Expense> expenses) async {
     await _initFuture;
-    state = [...state, ...expenses];
+    final now = DateTime.now();
+    final existingIds = state.map((e) => e.id).toSet();
+    state = [
+      ...state,
+      ...expenses
+          .where((e) => !existingIds.contains(e.id))
+          .map((e) => e.deletedAt == null ? e.copyWith(deletedAt: now) : e),
+    ];
     _save();
   }
 
   Future<void> restoreExpense(String id) async {
     await _initFuture;
     final exp = state.firstWhere((e) => e.id == id);
+    await ref.read(expensesProvider.notifier).restoreExpenses([exp]);
     state = state.where((e) => e.id != id).toList();
-    await ref.read(expensesProvider.notifier).addExpense(exp);
     _save();
   }
 
@@ -1001,10 +1155,8 @@ class DeletedExpensesNotifier extends Notifier<List<Expense>> {
   Future<void> restoreAll() async {
     await _initFuture;
     final allExps = List<Expense>.from(state);
+    await ref.read(expensesProvider.notifier).restoreExpenses(allExps);
     state = [];
-    for (final exp in allExps) {
-      await ref.read(expensesProvider.notifier).addExpense(exp);
-    }
     _save();
   }
 
@@ -1066,11 +1218,20 @@ class LinkItemsNotifier extends Notifier<List<LinkItem>> {
     }
   }
 
-  Future<void> addLink(LinkItem link) async {
+  /// Adds [link]. Returns false if the same URL is already saved.
+  Future<bool> addLink(LinkItem link) async {
     await _initFuture;
-    // Deduplication by URL
-    if (state.any((l) => l.url == link.url)) return;
+    if (state.any((l) => l.id == link.id || l.url == link.url)) return false;
     state = [...state, link];
+    _save();
+    return true;
+  }
+
+  /// Moves every link in [oldName] to [newName] with a single save.
+  Future<void> renameCategoryInLinks(String oldName, String newName) async {
+    await _initFuture;
+    if (!state.any((l) => l.category == oldName)) return;
+    state = [for (final l in state) if (l.category == oldName) l.copyWith(category: newName) else l];
     _save();
   }
 
@@ -1116,12 +1277,23 @@ class LinkItemsNotifier extends Notifier<List<LinkItem>> {
 
   Future<void> deleteLinks(List<String> ids) async {
     await _initFuture;
-    final deletedLinks = state.where((l) => ids.contains(l.id)).toList();
+    final now = DateTime.now();
+    final deletedLinks = state.where((l) => ids.contains(l.id)).map((l) => l.copyWith(deletedAt: now)).toList();
     state = state.where((l) => !ids.contains(l.id)).toList();
     
     // Add to recycle bin
     ref.read(deletedLinksProvider.notifier).addLinks(deletedLinks);
     
+    _save();
+  }
+
+  /// Puts links back from the Recycle Bin without the URL de-duplication used by [addLink].
+  Future<void> restoreLinks(List<LinkItem> links) async {
+    await _initFuture;
+    final existingIds = state.map((l) => l.id).toSet();
+    final toAdd = links.where((l) => !existingIds.contains(l.id)).map((l) => l.copyWith(deletedAt: null)).toList();
+    if (toAdd.isEmpty) return;
+    state = [...state, ...toAdd];
     _save();
   }
 
@@ -1170,15 +1342,22 @@ class DeletedLinksNotifier extends Notifier<List<LinkItem>> {
 
   Future<void> addLinks(List<LinkItem> links) async {
     await _initFuture;
-    state = [...state, ...links];
+    final now = DateTime.now();
+    final existingIds = state.map((l) => l.id).toSet();
+    state = [
+      ...state,
+      ...links
+          .where((l) => !existingIds.contains(l.id))
+          .map((l) => l.deletedAt == null ? l.copyWith(deletedAt: now) : l),
+    ];
     _save();
   }
 
   Future<void> restoreLink(String id) async {
     await _initFuture;
     final link = state.firstWhere((l) => l.id == id);
+    await ref.read(linkItemsProvider.notifier).restoreLinks([link]);
     state = state.where((l) => l.id != id).toList();
-    await ref.read(linkItemsProvider.notifier).addLink(link);
     _save();
   }
 
@@ -1191,10 +1370,8 @@ class DeletedLinksNotifier extends Notifier<List<LinkItem>> {
   Future<void> restoreAll() async {
     await _initFuture;
     final allLinks = List<LinkItem>.from(state);
+    await ref.read(linkItemsProvider.notifier).restoreLinks(allLinks);
     state = [];
-    for (final link in allLinks) {
-      await ref.read(linkItemsProvider.notifier).addLink(link);
-    }
     _save();
   }
 
@@ -1261,46 +1438,35 @@ class LinkCategoriesNotifier extends Notifier<List<String>> {
 
   Future<void> renameCategory(String oldName, String newName) async {
     await _initFuture;
-    if (oldName == 'All') return;
+    newName = newName.trim();
+    if (oldName == 'All' || newName.isEmpty || newName == 'All' || newName == 'General' || newName == oldName) return;
+    if (state.contains(newName)) return; // would create a duplicate
     state = [for (final c in state) if (c == oldName) newName else c];
-    
-    // Update links in this category
-    final linksNotifier = ref.read(linkItemsProvider.notifier);
-    final allLinks = ref.read(linkItemsProvider);
-    for (final link in allLinks) {
-      if (link.category == oldName) {
-        await linksNotifier.updateLink(link.copyWith(category: newName));
-      }
+
+    await ref.read(linkItemsProvider.notifier).renameCategoryInLinks(oldName, newName);
+    if (ref.read(selectedLinkCategoryProvider) == oldName) {
+      ref.read(selectedLinkCategoryProvider.notifier).state = newName;
     }
     _save();
   }
 
   Future<void> deleteCategory(String category) async {
-    await _initFuture;
-    if (category == 'All') return;
-    state = state.where((c) => c != category).toList();
-    
-    // Move links to All
-    final allLinks = ref.read(linkItemsProvider);
-    for (final link in allLinks) {
-      if (link.category == category) {
-        await ref.read(linkItemsProvider.notifier).updateLink(link.copyWith(category: 'All'));
-      }
-    }
-    _save();
+    await deleteCategories([category]);
   }
 
   Future<void> deleteCategories(List<String> categoriesToDelete) async {
     await _initFuture;
-    state = state.where((c) => !categoriesToDelete.contains(c) || c == 'All').toList();
-    
-    // Move all links in these categories to All
+    final toDelete = categoriesToDelete.where((c) => c != 'All').toList();
+    if (toDelete.isEmpty) return;
+    state = state.where((c) => !toDelete.contains(c)).toList();
+
+    // Links in deleted categories stay visible under "All" (single save).
     final linksNotifier = ref.read(linkItemsProvider.notifier);
-    final allLinks = ref.read(linkItemsProvider);
-    for (final link in allLinks) {
-      if (categoriesToDelete.contains(link.category)) {
-        await linksNotifier.updateLink(link.copyWith(category: 'All'));
-      }
+    for (final cat in toDelete) {
+      await linksNotifier.renameCategoryInLinks(cat, 'All');
+    }
+    if (toDelete.contains(ref.read(selectedLinkCategoryProvider))) {
+      ref.read(selectedLinkCategoryProvider.notifier).state = 'All';
     }
     _save();
   }
@@ -1353,6 +1519,14 @@ class TablesNotifier extends Notifier<List<VaultTable>> {
   Future<void> deleteTable(String id) async {
     await _initFuture;
     state = state.where((t) => t.id != id).toList();
+    _save();
+  }
+
+  /// Puts a deleted table back (used by Undo). No-op if it already exists.
+  Future<void> restoreTable(VaultTable table) async {
+    await _initFuture;
+    if (state.any((t) => t.id == table.id)) return;
+    state = [...state, table];
     _save();
   }
 
@@ -1525,14 +1699,41 @@ final googleUserProvider = StreamProvider<GoogleSignInAccount?>((ref) {
   return controller.stream;
 });
 
+/// Every vault file that holds user data. Backup and restore both use this list
+/// so they can never drift apart (previously reminders, recycle bin, service
+/// history and monthly reports were silently left out of one or the other).
+const List<String> kVaultDataFiles = VaultService.dataFiles;
+
+/// Pseudo file name for the Docs vault (Hive DB + attached images, zipped).
+const String kDocsBackupKey = 'docs_data';
+
+const String kDriveBackupFolder = 'vault_notes_backup';
+
 enum SyncStatus { idle, syncing, success, error }
 
 class SyncNotifier extends Notifier<SyncStatus> {
+  /// Human readable details about the last sync (e.g. which items failed).
+  String? lastMessage;
+
   @override
   SyncStatus build() => SyncStatus.idle;
 
+  void _finish(List<String> failed, String successMessage) {
+    if (failed.isEmpty) {
+      lastMessage = successMessage;
+      state = SyncStatus.success;
+      Future.delayed(const Duration(seconds: 3), () {
+        if (state == SyncStatus.success) state = SyncStatus.idle;
+      });
+    } else {
+      lastMessage = 'Failed: ${failed.join(', ')}';
+      state = SyncStatus.error;
+    }
+  }
+
   Future<void> syncWithDrive({List<String>? selectedFiles}) async {
     state = SyncStatus.syncing;
+    lastMessage = null;
     try {
       final driveService = ref.read(googleDriveServiceProvider);
       final vaultService = ref.read(vaultServiceProvider);
@@ -1546,94 +1747,132 @@ class SyncNotifier extends Notifier<SyncStatus> {
         return;
       }
 
-      final filesToSync = selectedFiles ?? [
-        'notes_data.json',
-        'expenses_data.json',
-        'links_data.json',
-        'tables_data.json',
-        'bills_data.json',
-        'monthly_reports.json',
-        'mileage_data.json',
-        'docs_data',
-      ];
+      final filesToSync = selectedFiles ?? [...kVaultDataFiles, kDocsBackupKey];
 
+      // Data that only lives in SharedPreferences is mirrored into the vault first.
+      if (filesToSync.contains('app_settings.json')) {
+        await vaultService.exportAppSettings();
+      }
+
+      final failed = <String>[];
+      int uploaded = 0;
       for (final fileName in filesToSync) {
-        if (fileName == 'docs_data') {
-          await docs_drive.GoogleDriveService().backupData();
-        } else {
-          final localFile = File('$vaultPath/$fileName');
-          if (await localFile.exists()) {
-            await driveService.uploadFile(localFile, 'vault_notes_backup');
+        try {
+          if (fileName == kDocsBackupKey) {
+            await docs_drive.GoogleDriveService().backupData();
+            uploaded++;
+          } else {
+            final localFile = File('$vaultPath/$fileName');
+            if (await localFile.exists()) {
+              await driveService.uploadFile(localFile, kDriveBackupFolder);
+              uploaded++;
+            }
           }
+        } catch (e) {
+          print('Backup error for $fileName: $e');
+          failed.add(fileName);
         }
       }
 
-      state = SyncStatus.success;
-      Future.delayed(const Duration(seconds: 3), () {
-        if (state == SyncStatus.success) state = SyncStatus.idle;
-      });
+      _finish(failed, 'Backed up $uploaded item${uploaded == 1 ? '' : 's'} to Google Drive');
     } catch (e) {
       print('Sync Error: $e');
+      lastMessage = e.toString();
       state = SyncStatus.error;
     }
   }
 
   Future<void> downloadFromDrive() async {
-     state = SyncStatus.syncing;
-     try {
-       final driveService = ref.read(googleDriveServiceProvider);
-       final vaultService = ref.read(vaultServiceProvider);
-       final vaultPath = await vaultService.getVaultPath();
+    state = SyncStatus.syncing;
+    lastMessage = null;
+    try {
+      final driveService = ref.read(googleDriveServiceProvider);
+      final vaultService = ref.read(vaultServiceProvider);
+      final vaultPath = await vaultService.getVaultPath();
 
-       if (vaultPath == null) throw Exception('Vault path not set');
+      if (vaultPath == null) throw Exception('Vault path not set');
 
-       final account = await driveService.signIn();
-       if (account == null) {
-         state = SyncStatus.idle;
-         return;
-       }
+      final account = await driveService.signIn();
+      if (account == null) {
+        state = SyncStatus.idle;
+        return;
+      }
 
-      final filesToSync = [
-         'notes_data.json',
-         'expenses_data.json',
-         'links_data.json',
-         'tables_data.json',
-         'bills_data.json',
-         'monthly_reports.json',
-         'mileage_data.json',
-         'docs_data',
-       ];
+      // Snapshot the current local data first: a restore replaces every file,
+      // and the Drive copy may be older than what is on this device.
+      final snapshot = await vaultService.createLocalBackup('before_restore', keep: 20);
 
-       for (final fileName in filesToSync) {
-         if (fileName == 'docs_data') {
-           await docs_drive.GoogleDriveService().restoreData();
-         } else {
-           final localFile = File('$vaultPath/$fileName');
-           await driveService.downloadFile(fileName, 'vault_notes_backup', localFile);
-         }
-       }
+      final failed = <String>[];
+      int restored = 0;
+      for (final fileName in kVaultDataFiles) {
+        // Download into a temp file first so a failed/partial download never
+        // replaces a good local file.
+        final localFile = File('$vaultPath/$fileName');
+        final tempFile = File('$vaultPath/$fileName.download');
+        try {
+          final found = await driveService.downloadFile(fileName, kDriveBackupFolder, tempFile);
+          if (found) {
+            await tempFile.rename(localFile.path);
+            restored++;
+          }
+        } catch (e) {
+          print('Restore error for $fileName: $e');
+          failed.add(fileName);
+          if (await tempFile.exists()) await tempFile.delete();
+        }
+      }
 
-       // Refresh data
-       ref.invalidate(notesProvider);
-       ref.invalidate(expensesProvider);
-       ref.invalidate(linkItemsProvider);
-       ref.invalidate(categoriesProvider);
-       ref.invalidate(expenseCategoriesProvider);
-       ref.invalidate(linkCategoriesProvider);
-       ref.invalidate(fuelEntriesProvider);
-       ref.invalidate(tablesProvider);
-       ref.invalidate(tableCategoriesProvider);
-       ref.invalidate(billsProvider);
+      try {
+        await docs_drive.GoogleDriveService().restoreData();
+        DocumentProvider.current?.reload();
+        restored++;
+      } catch (e) {
+        // "No backups found" is not fatal: the rest of the vault is restored.
+        print('Docs restore: $e');
+        if (!e.toString().contains('No backups found')) failed.add('Docs');
+      }
 
-       state = SyncStatus.success;
-       Future.delayed(const Duration(seconds: 3), () {
-         if (state == SyncStatus.success) state = SyncStatus.idle;
-       });
-     } catch (e) {
-       print('Download Error: $e');
-       state = SyncStatus.error;
-     }
+      // The files were replaced behind VaultService's back: drop its cache,
+      // otherwise every provider below would reload the pre-restore data and the
+      // next save would write it over the restored files.
+      vaultService.clearCache();
+      await vaultService.importAppSettings();
+
+      ref.invalidate(notesProvider);
+      ref.invalidate(categoriesProvider);
+      ref.invalidate(expensesProvider);
+      ref.invalidate(expenseCategoriesProvider);
+      ref.invalidate(expenseBudgetProvider);
+      ref.invalidate(linkItemsProvider);
+      ref.invalidate(linkCategoriesProvider);
+      ref.invalidate(tablesProvider);
+      ref.invalidate(tableCategoriesProvider);
+      ref.invalidate(remindersProvider);
+      ref.invalidate(billsProvider);
+      ref.invalidate(fuelEntriesProvider);
+      ref.invalidate(serviceEntriesProvider);
+      ref.invalidate(deletedNotesProvider);
+      ref.invalidate(deletedExpensesProvider);
+      ref.invalidate(deletedLinksProvider);
+      ref.invalidate(groceryProvider);
+      ref.invalidate(groceryCatalogProvider);
+      ref.invalidate(enabledTabsProvider);
+      ref.invalidate(profilesProvider); // profiles_data.json was replaced too
+
+      await rescheduleAllNotifications(vaultService);
+
+      _finish(
+        failed,
+        'Restored $restored item${restored == 1 ? '' : 's'} from Google Drive'
+        '${snapshot != null ? ' (previous data kept in ${VaultService.backupFolderName})' : ''}',
+      );
+    } catch (e) {
+      print('Download Error: $e');
+      lastMessage = e.toString();
+      state = SyncStatus.error;
+    }
   }
+
   Future<void> signOut() async {
     try {
       final driveService = ref.read(googleDriveServiceProvider);
@@ -1647,77 +1886,38 @@ class SyncNotifier extends Notifier<SyncStatus> {
 
 final syncProvider = NotifierProvider<SyncNotifier, SyncStatus>(SyncNotifier.new);
 
-// --- Cards Vault Implementation ---
-
-class CardsNotifier extends Notifier<List<VaultCard>> {
-  Future<void>? _initFuture;
-
-  @override
-  List<VaultCard> build() {
-    ref.watch(vaultPathProvider);
-    _initFuture = _load();
-    return [];
-  }
-
-  Future<void> _load() async {
-    final path = await ref.read(vaultServiceProvider).getVaultPath();
-    if (path == null) {
-      state = [];
-      return;
+/// Re-creates every bill and reminder notification from the vault files.
+/// Used after a Drive restore and once at app start (bill reminders are
+/// scheduled a couple of cycles ahead, so this keeps them topped up).
+Future<void> rescheduleAllNotifications(VaultService vaultService, {bool askPermission = true}) async {
+  try {
+    final data = await vaultService.loadVaultData();
+    for (final raw in (data['bills'] as List? ?? [])) {
+      try {
+        final bill = Bill.fromJson(Map<String, dynamic>.from(raw));
+        await NotificationService().scheduleBillNotificationsFor(bill, askPermission: askPermission);
+      } catch (e) {
+        print('Skipping bill reminder: $e');
+      }
     }
-    final service = ref.read(vaultServiceProvider);
-    final passcode = ref.read(lockProvider);
-    state = await service.loadCards(passcode);
-  }
-
-  Future<void> addCard(VaultCard card) async {
-    await _initFuture;
-    state = [card, ...state];
-    await _save();
-  }
-
-  Future<void> updateCard(VaultCard card) async {
-    await _initFuture;
-    state = [for (final c in state) if (c.id == card.id) card else c];
-    await _save();
-  }
-
-  Future<void> deleteCard(String id) async {
-    await _initFuture;
-    state = state.where((c) => c.id != id).toList();
-    await _save();
-  }
-
-  Future<void> _save() async {
-    final path = await ref.read(vaultServiceProvider).getVaultPath();
-    if (path == null) return;
-    final passcode = ref.read(lockProvider);
-    await ref.read(vaultServiceProvider).saveCards(state, passcode);
-    _triggerLocalSyncIndicator(ref);
+    for (final raw in (data['reminders'] as List? ?? [])) {
+      try {
+        final r = Reminder.fromJson(Map<String, dynamic>.from(raw));
+        if (r.isDismissed) {
+          await NotificationService().cancelReminderNotification(r.id);
+        } else {
+          await NotificationService().scheduleReminderFor(r);
+        }
+      } catch (e) {
+        print('Skipping reminder: $e');
+      }
+    }
+  } catch (e) {
+    print('Error rescheduling notifications: $e');
   }
 }
 
-final cardsProvider = NotifierProvider<CardsNotifier, List<VaultCard>>(CardsNotifier.new);
 
-final filteredCardsProvider = Provider<List<VaultCard>>((ref) {
-  final cards = ref.watch(cardsProvider);
-  final query = ref.watch(searchQueryProvider).toLowerCase();
-  
-  if (query.isEmpty) return cards;
-  
-  return cards.where((c) => 
-    c.bankName.toLowerCase().contains(query) || 
-    c.cardNumber.contains(query) || 
-    c.holderName.toLowerCase().contains(query)
-  ).toList();
-});
-
-class RevealedCardNotifier extends Notifier<String?> {
-  @override
-  String? build() => null;
-  void setRevealed(String? id) => state = id;
-}
-final revealedCardIdProvider = NotifierProvider<RevealedCardNotifier, String?>(RevealedCardNotifier.new);
 
 class RemindersNotifier extends Notifier<List<Reminder>> {
   Future<void>? _initFuture;
@@ -1737,18 +1937,15 @@ class RemindersNotifier extends Notifier<List<Reminder>> {
     }
   }
 
+  /// Completes once the reminders have been loaded from the vault.
+  Future<void> get ready => _initFuture ?? Future.value();
+
   Future<void> addReminder(Reminder reminder) async {
     await _initFuture;
     state = [...state, reminder];
     _save();
     if (!reminder.isDismissed) {
-      NotificationService().scheduleReminderNotification(
-        id: reminder.id,
-        title: reminder.title,
-        body: reminder.description.isNotEmpty ? reminder.description : 'You have a reminder!',
-        dateTime: reminder.dateTime,
-        repeatType: reminder.repeatType,
-      );
+      NotificationService().scheduleReminderFor(reminder);
     }
   }
 
@@ -1760,19 +1957,14 @@ class RemindersNotifier extends Notifier<List<Reminder>> {
     Reminder finalReminder = reminder;
 
     if (newlyDismissed && reminder.repeatType != 'none') {
-      DateTime nextDate = reminder.dateTime;
-      if (reminder.repeatType == 'daily') {
-        nextDate = nextDate.add(const Duration(days: 1));
-      } else if (reminder.repeatType == 'weekly') {
-        nextDate = nextDate.add(const Duration(days: 7));
-      } else if (reminder.repeatType == 'monthly') {
-        nextDate = DateTime(nextDate.year, nextDate.month + 1, nextDate.day);
-      }
-      
+      // Jump to the next occurrence after *now* (a daily reminder missed for
+      // several days must not stay overdue), keeping the original schedule.
+      final anchor = reminder.referenceDate ?? oldReminder.referenceDate ?? oldReminder.dateTime;
+      final after = reminder.dateTime.isAfter(DateTime.now()) ? reminder.dateTime : DateTime.now();
       finalReminder = reminder.copyWith(
-        dateTime: nextDate,
+        dateTime: reminderOccurrenceAfter(anchor, reminder.repeatType, after),
         isDismissed: false, // Keep it active for the next occurrence
-        referenceDate: reminder.referenceDate ?? reminder.dateTime,
+        referenceDate: anchor,
       );
     }
 
@@ -1784,13 +1976,7 @@ class RemindersNotifier extends Notifier<List<Reminder>> {
     if (finalReminder.isDismissed) {
       NotificationService().cancelReminderNotification(finalReminder.id);
     } else {
-      NotificationService().scheduleReminderNotification(
-        id: finalReminder.id,
-        title: finalReminder.title,
-        body: finalReminder.description.isNotEmpty ? finalReminder.description : 'You have a reminder!',
-        dateTime: finalReminder.dateTime,
-        repeatType: finalReminder.repeatType,
-      );
+      NotificationService().scheduleReminderFor(finalReminder);
     }
 
     _save();
@@ -1801,6 +1987,19 @@ class RemindersNotifier extends Notifier<List<Reminder>> {
     state = state.where((r) => r.id != id).toList();
     _save();
     NotificationService().cancelReminderNotification(id);
+  }
+
+  /// Puts back reminders removed by [deleteReminders] (used by Undo).
+  Future<void> restoreReminders(List<Reminder> reminders) async {
+    await _initFuture;
+    final existing = state.map((r) => r.id).toSet();
+    final toAdd = reminders.where((r) => !existing.contains(r.id)).toList();
+    if (toAdd.isEmpty) return;
+    state = [...state, ...toAdd];
+    _save();
+    for (final r in toAdd) {
+      if (!r.isDismissed) NotificationService().scheduleReminderFor(r);
+    }
   }
 
   Future<void> deleteReminders(List<String> ids) async {
@@ -1824,6 +2023,7 @@ class BillsNotifier extends Notifier<List<Bill>> {
 
   @override
   List<Bill> build() {
+    ref.watch(vaultPathProvider);
     _initFuture = _load();
     return [];
   }
@@ -1833,21 +2033,32 @@ class BillsNotifier extends Notifier<List<Bill>> {
     final List<dynamic> jsonList = data['bills'] ?? [];
     List<Bill> loadedBills = jsonList.map((e) => Bill.fromJson(e)).toList();
     
-    bool needsSave = false;
-    final now = DateTime.now();
-    for (int i = 0; i < loadedBills.length; i++) {
-      var bill = loadedBills[i];
-      if (bill.isPaid && bill.lastPaidDate != null) {
-        if (bill.lastPaidDate!.month != now.month || bill.lastPaidDate!.year != now.year) {
-          loadedBills[i] = bill.copyWith(isPaid: false);
-          needsSave = true;
-        }
-      }
-    }
-    
     state = loadedBills;
-    if (needsSave) {
+    refreshPaidStatus();
+  }
+
+  /// A bill only stays "paid" for the billing cycle the payment covered.
+  /// Cycles follow the due date, not the calendar month, so paying a bill due
+  /// on the 2nd on the 30th of the month before still counts as paid.
+  void refreshPaidStatus() {
+    final now = DateTime.now();
+    var changed = false;
+    final next = [
+      for (final b in state)
+        if (b.isPaid && b.paidCycle != b.currentCycle(now))
+          () {
+            changed = true;
+            return b.copyWith(isPaid: false);
+          }()
+        else
+          b
+    ];
+    if (changed) {
+      state = next;
       _save();
+      for (final b in next) {
+        NotificationService().scheduleBillNotificationsFor(b, askPermission: false);
+      }
     }
   }
 
@@ -1864,38 +2075,84 @@ class BillsNotifier extends Notifier<List<Bill>> {
   }
 
   Future<void> deleteBill(String id) async {
-    await _initFuture;
-    state = state.where((b) => b.id != id).toList();
-    _save();
+    await deleteBills([id]);
   }
 
+  /// Deletes bills and cancels their scheduled reminders, so a deleted bill
+  /// never keeps notifying every month.
   Future<void> deleteBills(Iterable<String> ids) async {
     await _initFuture;
-    state = state.where((b) => !ids.contains(b.id)).toList();
+    final idSet = ids.toSet();
+    state = state.where((b) => !idSet.contains(b.id)).toList();
     _save();
+    for (final id in idSet) {
+      await NotificationService().cancelBillNotifications(id);
+    }
+  }
+
+  /// Reverts [markAsPaid]: clears the paid date and, if this month's payment
+  /// was counted as an EMI, takes that count back.
+  Future<void> markAsUnpaid(String id) async {
+    await _initFuture;
+    final now = DateTime.now();
+    state = [
+      for (final b in state)
+        if (b.id == id)
+          () {
+            final cycle = b.currentCycle(now);
+            final countedThisCycle = b.lastEmiPaidMonth == cycle || b.paidCycle == cycle;
+            return b.copyWith(
+              isPaid: false,
+              lastPaidDate: null,
+              paidEmis: countedThisCycle && (b.paidEmis ?? 0) > 0 ? b.paidEmis! - 1 : b.paidEmis,
+              lastEmiPaidMonth: countedThisCycle ? null : b.lastEmiPaidMonth,
+            );
+          }()
+        else b
+    ];
+    _save();
+    final bill = state.where((b) => b.id == id).firstOrNull;
+    if (bill != null) NotificationService().scheduleBillNotificationsFor(bill, askPermission: false);
   }
 
   Future<void> markAsPaid(String id) async {
     await _initFuture;
     final now = DateTime.now();
-    final currentMonth = '${now.year}-${now.month.toString().padLeft(2, '0')}';
     state = [
       for (final b in state)
         if (b.id == id)
-          b.copyWith(
-            isPaid: true,
-            lastPaidDate: now,
-            // Increment paidEmis for any bill if not already counted this month
-            paidEmis: (b.lastEmiPaidMonth != currentMonth)
-                ? (b.paidEmis ?? 0) + 1
-                : b.paidEmis,
-            lastEmiPaidMonth: (b.lastEmiPaidMonth != currentMonth)
-                ? currentMonth
-                : b.lastEmiPaidMonth,
-          )
+          () {
+            final cycle = b.currentCycle(now);
+            final alreadyCounted = b.lastEmiPaidMonth == cycle;
+            var paid = alreadyCounted ? b.paidEmis : (b.paidEmis ?? 0) + 1;
+            // Never count more EMIs than the loan has.
+            if (paid != null && b.totalEmis != null && b.totalEmis! > 0 && paid > b.totalEmis!) paid = b.totalEmis;
+            return b.copyWith(
+              isPaid: true,
+              lastPaidDate: now,
+              paidEmis: paid,
+              lastEmiPaidMonth: cycle,
+            );
+          }()
         else b
     ];
     _save();
+    // No more "due in 2 days" reminders for a cycle that is already paid.
+    final bill = state.where((b) => b.id == id).firstOrNull;
+    if (bill != null) NotificationService().scheduleBillNotificationsFor(bill, askPermission: false);
+  }
+
+  /// Puts back bills removed by [deleteBills] (used by Undo).
+  Future<void> restoreBills(List<Bill> bills) async {
+    await _initFuture;
+    final existing = state.map((b) => b.id).toSet();
+    final toAdd = bills.where((b) => !existing.contains(b.id)).toList();
+    if (toAdd.isEmpty) return;
+    state = [...state, ...toAdd];
+    _save();
+    for (final b in toAdd) {
+      await NotificationService().scheduleBillNotificationsFor(b, askPermission: false);
+    }
   }
 
   void _save() {
@@ -1944,7 +2201,7 @@ class SelectedBillsNotifier extends Notifier<Set<String>> {
 final selectedBillsProvider = NotifierProvider<SelectedBillsNotifier, Set<String>>(SelectedBillsNotifier.new);
 
 final currentTimeProvider = StreamProvider<DateTime>((ref) {
-  return Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now());
+  return Stream.periodic(const Duration(seconds: 15), (_) => DateTime.now());
 });
 
 final activeRemindersProvider = Provider<List<Reminder>>((ref) {
@@ -1958,10 +2215,13 @@ class FuelEntriesNotifier extends Notifier<List<FuelEntry>> {
 
   @override
   List<FuelEntry> build() {
-    state = [];
+    ref.watch(vaultPathProvider);
     _initFuture = _load();
-    return state;
+    return [];
   }
+
+  /// Completes once the fuel entries have been loaded from the vault.
+  Future<void> get ready => _initFuture ?? Future.value();
 
   Future<void> _load() async {
     final data = await ref.read(vaultServiceProvider).loadVaultData();
@@ -1975,8 +2235,17 @@ class FuelEntriesNotifier extends Notifier<List<FuelEntry>> {
 
   Future<void> addEntry(FuelEntry entry) async {
     await _initFuture;
-    state = [...state, entry]..sort((a, b) => a.date.compareTo(b.date));
+    state = [...state, entry]..sort(_compareFuel);
     _save();
+  }
+
+  /// Date first, then odometer, so several fills on one day keep their order
+  /// (Dart's sort is not stable, which could swap them and break mileage maths).
+  static int _compareFuel(FuelEntry a, FuelEntry b) {
+    final byDate = a.date.compareTo(b.date);
+    if (byDate != 0) return byDate;
+    if (!a.hasOdometer || !b.hasOdometer) return 0;
+    return a.odometer.compareTo(b.odometer);
   }
 
   Future<void> updateEntry(FuelEntry oldEntry, FuelEntry newEntry) async {
@@ -1985,7 +2254,7 @@ class FuelEntriesNotifier extends Notifier<List<FuelEntry>> {
     if (index != -1) {
       final newState = [...state];
       newState[index] = newEntry;
-      newState.sort((a, b) => a.date.compareTo(b.date));
+      newState.sort(_compareFuel);
       state = newState;
       _save();
     }
@@ -1997,85 +2266,206 @@ class FuelEntriesNotifier extends Notifier<List<FuelEntry>> {
     _save();
   }
 
+  /// Puts a deleted fill back (used by Undo).
+  Future<void> restoreEntry(FuelEntry entry) async {
+    await _initFuture;
+    if (state.contains(entry)) return;
+    state = [...state, entry]..sort(_compareFuel);
+    _save();
+  }
+
   Future<void> setEntries(List<FuelEntry> entries) async {
+    await _initFuture;
     state = entries;
     _save();
   }
 
   void _save() {
     ref.read(vaultServiceProvider).saveFuelEntries(state);
+    _triggerLocalSyncIndicator(ref);
   }
 }
 
 final fuelEntriesProvider = NotifierProvider<FuelEntriesNotifier, List<FuelEntry>>(FuelEntriesNotifier.new);
 
+class ServiceEntriesNotifier extends Notifier<List<ServiceEntry>> {
+  Future<void>? _initFuture;
 
-class GroceryNotifier extends Notifier<List<GroceryItem>> {
   @override
-  List<GroceryItem> build() {
-    _loadItems();
+  List<ServiceEntry> build() {
+    ref.watch(vaultPathProvider);
+    _initFuture = _load();
     return [];
   }
 
-  void _loadItems() async {
+  Future<void> _load() async {
+    final data = await ref.read(vaultServiceProvider).loadVaultData();
+    final list = data['serviceEntries'] as List? ?? [];
+    state = list.map((e) => ServiceEntry.fromJson(Map<String, dynamic>.from(e))).toList();
+  }
+
+  Future<void> refresh() async {
+    await _load();
+  }
+
+  Future<void> addEntry(ServiceEntry entry) async {
+    await _initFuture;
+    state = [...state, entry]..sort((a, b) => a.date.compareTo(b.date));
+    _save();
+  }
+
+  Future<void> updateEntry(ServiceEntry updated) async {
+    await _initFuture;
+    state = [
+      for (final e in state)
+        if (e.id == updated.id) updated else e
+    ]..sort((a, b) => a.date.compareTo(b.date));
+    _save();
+  }
+
+  Future<void> deleteEntry(String id) async {
+    await _initFuture;
+    state = state.where((e) => e.id != id).toList();
+    _save();
+  }
+
+  /// Puts a deleted service entry back (used by Undo).
+  Future<void> restoreEntry(ServiceEntry entry) async {
+    await _initFuture;
+    if (state.any((e) => e.id == entry.id)) return;
+    state = [...state, entry]..sort((a, b) => a.date.compareTo(b.date));
+    _save();
+  }
+
+  void _save() {
+    ref.read(vaultServiceProvider).saveServiceEntries(state);
+    _triggerLocalSyncIndicator(ref);
+  }
+
+  Future<void> setEntries(List<ServiceEntry> entries) async {
+    await _initFuture;
+    state = entries;
+    _save();
+  }
+}
+
+final serviceEntriesProvider = NotifierProvider<ServiceEntriesNotifier, List<ServiceEntry>>(ServiceEntriesNotifier.new);
+
+
+
+class GroceryNotifier extends Notifier<List<GroceryItem>> {
+  Future<void>? _initFuture;
+
+  @override
+  List<GroceryItem> build() {
+    _initFuture = _loadItems();
+    return [];
+  }
+
+  Future<void> _loadItems() async {
     final prefs = await SharedPreferences.getInstance();
     final data = prefs.getStringList('grocery_items') ?? [];
-    state = data.map((e) => GroceryItem.fromJson(jsonDecode(e))).toList();
+    final items = <GroceryItem>[];
+    for (final raw in data) {
+      try {
+        items.add(GroceryItem.fromJson(jsonDecode(raw)));
+      } catch (e) {
+        print('Skipping unreadable grocery item: $e');
+      }
+    }
+    state = items;
   }
 
-  void _saveItems() async {
+  Future<void> _saveItems() async {
     final prefs = await SharedPreferences.getInstance();
     final data = state.map((e) => jsonEncode(e.toJson())).toList();
-    prefs.setStringList('grocery_items', data);
+    await prefs.setStringList('grocery_items', data);
+    // The list lives in SharedPreferences; mirror it into the vault so local
+    // folder sync and Drive backups always include the latest list.
+    await ref.read(vaultServiceProvider).exportAppSettings();
   }
 
-  void addItem(String name) {
-    if (name.trim().isEmpty) return;
-    state = [...state, GroceryItem(name: name.trim())];
-    _saveItems();
+  static String _key(String name) => name.trim().toLowerCase();
+
+  /// Adds [name]. If it is already on the list it is not duplicated: an item
+  /// already bought is moved back to "to buy". Returns what happened.
+  Future<GroceryAddResult> addItem(String name) async {
+    await _initFuture;
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return GroceryAddResult.ignored;
+    final existing = state.where((i) => _key(i.name) == _key(trimmed)).firstOrNull;
+    if (existing != null) {
+      if (!existing.isPurchased) return GroceryAddResult.alreadyOnList;
+      state = [for (final i in state) if (i.id == existing.id) i.copyWith(isPurchased: false) else i];
+      await _saveItems();
+      return GroceryAddResult.movedBack;
+    }
+    state = [...state, GroceryItem(name: trimmed)];
+    await _saveItems();
+    return GroceryAddResult.added;
   }
 
-  void toggleItem(String id) {
+  Future<void> toggleItem(String id) async {
+    await _initFuture;
     state = [
       for (final item in state)
         if (item.id == id) item.copyWith(isPurchased: !item.isPurchased) else item
     ];
-    _saveItems();
+    await _saveItems();
   }
 
-  void editItem(String id, String newName) {
+  Future<void> editItem(String id, String newName) async {
+    await _initFuture;
+    if (newName.trim().isEmpty) return;
     state = [
       for (final item in state)
-        if (item.id == id) item.copyWith(name: newName) else item
+        if (item.id == id) item.copyWith(name: newName.trim()) else item
     ];
-    _saveItems();
+    await _saveItems();
   }
 
-  void deleteItem(String id) {
+  Future<void> deleteItem(String id) async {
+    await _initFuture;
     state = state.where((item) => item.id != id).toList();
-    _saveItems();
+    await _saveItems();
   }
 
-  void clearPurchased() {
+  Future<void> clearPurchased() async {
+    await _initFuture;
     state = state.where((item) => !item.isPurchased).toList();
-    _saveItems();
+    await _saveItems();
   }
 
-  void clearToBuy() {
+  Future<void> clearToBuy() async {
+    await _initFuture;
     state = state.where((item) => item.isPurchased).toList();
-    _saveItems();
+    await _saveItems();
   }
 
-  void clearAll() {
+  Future<void> clearAll() async {
+    await _initFuture;
     state = [];
-    _saveItems();
+    await _saveItems();
   }
 
-  void deleteMultiple(Set<String> ids) {
+  Future<void> deleteMultiple(Set<String> ids) async {
+    await _initFuture;
     state = state.where((item) => !ids.contains(item.id)).toList();
-    _saveItems();
+    await _saveItems();
+  }
+
+  /// Puts back items removed by a delete/clear (used by Undo), in their old order.
+  Future<void> restoreItems(List<GroceryItem> items) async {
+    await _initFuture;
+    final existing = state.map((i) => i.id).toSet();
+    final toAdd = items.where((i) => !existing.contains(i.id)).toList();
+    if (toAdd.isEmpty) return;
+    state = [...state, ...toAdd]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    await _saveItems();
   }
 }
+
+enum GroceryAddResult { added, alreadyOnList, movedBack, ignored }
 
 final groceryProvider = NotifierProvider<GroceryNotifier, List<GroceryItem>>(() {
   return GroceryNotifier();
@@ -2125,3 +2515,26 @@ class GroceryMasterCatalogNotifier extends AsyncNotifier<List<dynamic>> {
 }
 
 final groceryCatalogProvider = AsyncNotifierProvider<GroceryMasterCatalogNotifier, List<dynamic>>(GroceryMasterCatalogNotifier.new);
+
+
+class IsSelectionModeNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+  void setState(bool value) => state = value;
+}
+final isSelectionModeProvider = NotifierProvider<IsSelectionModeNotifier, bool>(IsSelectionModeNotifier.new);
+
+class SelectedGroceryNotifier extends Notifier<Set<String>> {
+  @override
+  Set<String> build() => {};
+  void toggle(String id) {
+    if (state.contains(id)) {
+      state = {...state}..remove(id);
+    } else {
+      state = {...state, id};
+    }
+  }
+  void selectAll(Set<String> ids) => state = ids;
+  void clear() => state = {};
+}
+final selectedGroceryProvider = NotifierProvider<SelectedGroceryNotifier, Set<String>>(SelectedGroceryNotifier.new);

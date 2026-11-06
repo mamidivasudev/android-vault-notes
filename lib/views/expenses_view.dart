@@ -56,7 +56,7 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
     final selectedCat = ref.watch(selectedExpenseCategoryProvider);
     final allExpenses = ref.watch(expensesProvider);
     final selectedExpenses = ref.watch(selectedExpensesProvider);
-    final isSelectionMode = selectedExpenses.isNotEmpty;
+    final isSelectionMode = selectedExpenses.isNotEmpty || ref.watch(isSelectionModeProvider);
 
     final fullCategories = categories;
 
@@ -81,9 +81,22 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
       }
     });
 
-    final categoryExpenses = allExpenses
-        .where((e) => currentSelectedCat == 'All' || e.category == currentSelectedCat)
-        .toList();
+    // The summary uses exactly what the list shows (category, favourites, search).
+    final summaryQuery = ref.watch(searchQueryProvider).toLowerCase();
+    final summaryFavs = ref.watch(showFavoritesOnlyProvider);
+    final categoryExpenses = allExpenses.where((e) {
+      if (currentSelectedCat != 'All' && e.category != currentSelectedCat) return false;
+      if (summaryFavs && !e.isFavorite) return false;
+      if (summaryQuery.isEmpty) return true;
+      return e.title.toLowerCase().contains(summaryQuery) || e.amount.toString().contains(summaryQuery);
+    }).toList();
+    // Budgets are monthly: compare against this month's spending in the category.
+    final now = DateTime.now();
+    final monthOut = allExpenses
+        .where((e) => e.type == 'Out' &&
+            (currentSelectedCat == 'All' || e.category == currentSelectedCat) &&
+            e.date.year == now.year && e.date.month == now.month)
+        .fold<double>(0, (sum, e) => sum + e.amount);
 
     return Column(
       children: [
@@ -138,7 +151,7 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
             ),
           ],
         ),
-        _buildSummaryBar(categoryExpenses, currentSelectedCat),
+        _buildSummaryBar(categoryExpenses, currentSelectedCat, monthOut),
         if (_showBreakdown)
           ConstrainedBox(
             constraints: BoxConstraints(
@@ -167,7 +180,7 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
     );
   }
 
-  Widget _buildSummaryBar(List<Expense> expenses, String selectedCat) {
+  Widget _buildSummaryBar(List<Expense> expenses, String selectedCat, double monthSpent) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final sortOrder = ref.watch(expenseSortOrderProvider);
     double income = 0;
@@ -182,11 +195,11 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
     final budgets = ref.watch(expenseBudgetProvider);
     final budgetLimit = budgets[selectedCat];
     final hasBudget = budgetLimit != null && budgetLimit > 0;
-    final budgetRatio = hasBudget ? (expense / budgetLimit).clamp(0.0, 1.0) : 0.0;
+    final budgetRatio = hasBudget ? (monthSpent / budgetLimit).clamp(0.0, 1.0) : 0.0;
     final budgetColor = hasBudget
-        ? (expense > budgetLimit
+        ? (monthSpent > budgetLimit
             ? const Color(0xFFEF4444)
-            : expense >= budgetLimit * 0.8
+            : monthSpent >= budgetLimit * 0.8
                 ? const Color(0xFFF97316)
                 : const Color(0xFF10B981))
         : Colors.transparent;
@@ -235,13 +248,13 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  '₹${formatter.format(expense)} of ₹${formatter.format(budgetLimit)} limit',
+                  'This month: ₹${formatter.format(monthSpent)} of ₹${formatter.format(budgetLimit)}',
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: budgetColor),
                 ),
                 Text(
-                  expense > budgetLimit
-                      ? 'Over budget by ₹${formatter.format(expense - budgetLimit)}'
-                      : '₹${formatter.format(budgetLimit - expense)} remaining',
+                  monthSpent > budgetLimit
+                      ? 'Over by ₹${formatter.format(monthSpent - budgetLimit)}'
+                      : '₹${formatter.format(budgetLimit - monthSpent)} left',
                   style: TextStyle(fontSize: 11, color: budgetColor, fontWeight: FontWeight.w600),
                 ),
               ],
@@ -480,6 +493,13 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
     });
 
     if (filteredExpenses.isEmpty) {
+      if (query.isNotEmpty || showFavs) {
+        return EmptyState(
+          icon: Icons.search_off,
+          title: 'No matches',
+          subtitle: query.isNotEmpty ? 'No transactions match "$query".' : 'No favourite transactions here.',
+        );
+      }
       return EmptyState(
         icon: Icons.account_balance_wallet_outlined,
         title: 'Empty Category',
@@ -520,7 +540,7 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
             },
             onCheckboxChanged: (val) => ref.read(selectedExpensesProvider.notifier).toggle(exp.id),
             onMorePressed: () => showExpenseOptions(context, ref, exp),
-          ).animate().fadeIn(delay: (50 * index).ms, duration: 300.ms).slideY(begin: 0.1, end: 0, curve: Curves.easeOut);
+          ).animate().fadeIn(delay: (50 * (index < 8 ? index : 8)).ms, duration: 300.ms).slideY(begin: 0.1, end: 0, curve: Curves.easeOut);
         },
       );
     }
@@ -670,7 +690,8 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
           },
           onLongPress: () {
             if (!isSelectionMode) {
-              ref.read(selectedExpensesProvider.notifier).toggle(exp.id);
+                  ref.read(isSelectionModeProvider.notifier).setState(true);
+                  ref.read(selectedExpensesProvider.notifier).toggle(exp.id);
             }
           },
           onCheckboxChanged: (val) => ref.read(selectedExpensesProvider.notifier).toggle(exp.id),

@@ -41,7 +41,7 @@ class _LinksViewState extends ConsumerState<LinksView> {
     final selectedCat = ref.watch(selectedLinkCategoryProvider);
     final allLinks = ref.watch(linkItemsProvider);
     final selectedLinks = ref.watch(selectedLinksProvider);
-    final isSelectionMode = selectedLinks.isNotEmpty;
+    final isSelectionMode = selectedLinks.isNotEmpty || ref.watch(isSelectionModeProvider);
     final showFavs = ref.watch(showFavoritesOnlyProvider);
     
     final fullCategories = ['All', ...categories.where((c) => c != 'General')];
@@ -110,11 +110,13 @@ class _LinksViewState extends ConsumerState<LinksView> {
 
                 
                 switch (sortOrder) {
-                  case NoteSortOrder.dateNewest: return b.createdAt.compareTo(a.createdAt);
                   case NoteSortOrder.dateOldest: return a.createdAt.compareTo(b.createdAt);
                   case NoteSortOrder.atoz: return a.title.toLowerCase().compareTo(b.title.toLowerCase());
                   case NoteSortOrder.ztoa: return b.title.toLowerCase().compareTo(a.title.toLowerCase());
-                  default: return b.createdAt.compareTo(a.createdAt);
+                  case NoteSortOrder.manual: return a.orderIndex.compareTo(b.orderIndex);
+                  case NoteSortOrder.dateNewest:
+                  case NoteSortOrder.modifiedNewest:
+                    return b.createdAt.compareTo(a.createdAt);
                 }
               });
               
@@ -149,10 +151,11 @@ class _LinksViewState extends ConsumerState<LinksView> {
                     onLongPress: () {
                       HapticFeedback.mediumImpact();
                       if (!isSelectionMode) {
-                        ref.read(selectedLinksProvider.notifier).toggle(link.id);
+                  ref.read(isSelectionModeProvider.notifier).setState(true);
+                  ref.read(selectedLinksProvider.notifier).toggle(link.id);
                       }
                     },
-                  ).animate().fadeIn(delay: (50 * index).ms, duration: 300.ms).slideY(begin: 0.1, end: 0, curve: Curves.easeOut);
+                  ).animate().fadeIn(delay: (50 * (index < 8 ? index : 8)).ms, duration: 300.ms).slideY(begin: 0.1, end: 0, curve: Curves.easeOut);
                 },
               );
             },
@@ -173,12 +176,18 @@ class _LinksViewState extends ConsumerState<LinksView> {
   }
 
   Future<void> _launchURL(String urlString) async {
-    final Uri url = Uri.parse(urlString);
-    try {
-      if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-        throw 'Could not launch $url';
-      }
-    } catch (e) {}
+    var text = urlString.trim();
+    if (!text.contains('://')) text = 'https://$text';
+    final url = Uri.tryParse(text);
+    var opened = false;
+    if (url != null) {
+      try {
+        opened = await launchUrl(url, mode: LaunchMode.externalApplication);
+      } catch (_) {}
+    }
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not open $urlString')));
+    }
   }
 }
 

@@ -34,10 +34,10 @@ class FormulaEvaluator {
         return _handleCount(match.group(0)!, grid);
       });
       expression = expression.replaceAllMapped(RegExp(r'SUM\(([^)]+)\)'), (match) {
-        return _handleSum(match.group(0)!, grid);
+        return _handleSum(match.group(0)!, grid, bgColors, visited);
       });
       expression = expression.replaceAllMapped(RegExp(r'AVG\(([^)]+)\)'), (match) {
-        return _handleAvg(match.group(0)!, grid);
+        return _handleAvg(match.group(0)!, grid, bgColors, visited);
       });
 
       // 2. Replace cell references (e.g., A1, B2) with evaluated values
@@ -75,6 +75,9 @@ class FormulaEvaluator {
   }
 
   static String _format(double value) {
+    if (value.isNaN || value.isInfinite) return '#DIV/0!';
+    // Exponent notation can't be grouped; show it as-is.
+    if (value.abs() >= 1e21) return value.toString();
     // Custom Indian formatting logic since standard en_IN locale can be inconsistent on some devices
     String s = value.toString();
     List<String> parts = s.split('.');
@@ -143,7 +146,7 @@ class FormulaEvaluator {
         }
       }
     }
-    return _format(count.toDouble());
+    return _format(count.toDouble()).replaceAll(',', '');
   }
 
   static double _parseExpression(String str) {
@@ -284,7 +287,7 @@ class FormulaEvaluator {
         }
       }
     }
-    return _format(count.toDouble());
+    return _format(count.toDouble()).replaceAll(',', '');
   }
 
   static String _handleCountIfColor(String expression, List<List<String>> grid, List<List<String?>>? bgColors) {
@@ -325,10 +328,23 @@ class FormulaEvaluator {
         }
       }
     }
-    return _format(count.toDouble());
+    return _format(count.toDouble()).replaceAll(',', '');
   }
 
-  static String _handleSum(String expression, List<List<String>> grid) {
+  /// Numeric value of a cell, evaluating it first when it holds a formula, so
+  /// SUM/AVG over a column of formulas works. [visited] prevents cycles.
+  static double? _cellNumber(int r, int c, List<List<String>> grid, List<List<String?>>? bgColors, Set<String> visited) {
+    final raw = grid[r][c];
+    String value = raw;
+    if (raw.startsWith('=')) {
+      final key = '$r:$c';
+      if (visited.contains(key) || visited.length > 200) return null;
+      value = _evaluateWithVisited(raw, grid, bgColors: bgColors, visited: {...visited, key});
+    }
+    return double.tryParse(value.replaceAll(',', ''));
+  }
+
+  static String _handleSum(String expression, List<List<String>> grid, List<List<String?>>? bgColors, Set<String> visited) {
     final range = expression.substring(4, expression.length - 1);
     final parts = range.split(':');
     if (parts.length != 2) return '0';
@@ -347,17 +363,15 @@ class FormulaEvaluator {
     for (int r = min(startRow, endRow); r <= max(startRow, endRow); r++) {
       for (int c = min(startCol, endCol); c <= max(startCol, endCol); c++) {
         if (r >= 0 && r < grid.length && c >= 0 && c < grid[r].length) {
-          final val = grid[r][c].replaceAll(',', '');
-          if (_isNumeric(val)) {
-            sum += double.parse(val);
-          }
+          final n = _cellNumber(r, c, grid, bgColors, visited);
+          if (n != null) sum += n;
         }
       }
     }
-    return _format(sum);
+    return _format(sum).replaceAll(',', '');
   }
 
-  static String _handleAvg(String expression, List<List<String>> grid) {
+  static String _handleAvg(String expression, List<List<String>> grid, List<List<String?>>? bgColors, Set<String> visited) {
     final range = expression.substring(4, expression.length - 1);
     final parts = range.split(':');
     if (parts.length != 2) return '0';
@@ -377,14 +391,14 @@ class FormulaEvaluator {
     for (int r = min(startRow, endRow); r <= max(startRow, endRow); r++) {
       for (int c = min(startCol, endCol); c <= max(startCol, endCol); c++) {
         if (r >= 0 && r < grid.length && c >= 0 && c < grid[r].length) {
-          final val = grid[r][c].replaceAll(',', '');
-          if (_isNumeric(val)) {
-            sum += double.parse(val);
+          final n = _cellNumber(r, c, grid, bgColors, visited);
+          if (n != null) {
+            sum += n;
             count++;
           }
         }
       }
     }
-    return count == 0 ? '0' : _format(sum / count);
+    return count == 0 ? '0' : _format(sum / count).replaceAll(',', '');
   }
 }

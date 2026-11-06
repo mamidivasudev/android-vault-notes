@@ -359,7 +359,7 @@ class _ExpenseDialogState extends ConsumerState<ExpenseDialog> {
     );
   }
 
-  void _handleSave() {
+  Future<void> _handleSave() async {
     FocusScope.of(context).unfocus();
     final title = _titleController.text.trim();
     final amountStr = _amountController.text.trim();
@@ -371,8 +371,8 @@ class _ExpenseDialogState extends ConsumerState<ExpenseDialog> {
     }
 
     final amount = double.tryParse(amountStr.replaceAll(',', ''));
-    if (amount == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invalid amount')));
+    if (amount == null || amount <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter an amount greater than 0')));
       return;
     }
 
@@ -384,12 +384,25 @@ class _ExpenseDialogState extends ConsumerState<ExpenseDialog> {
       category: _selectedCategory,
       note: note.isEmpty ? null : note,
       date: _selectedDate,
+      // Editing must not reset these (it used to silently unlock/unpin items).
+      isLocked: widget.expense?.isLocked ?? false,
+      isPinned: widget.expense?.isPinned ?? false,
+      isFavorite: widget.expense?.isFavorite ?? false,
+      orderIndex: widget.expense?.orderIndex ?? 0,
     );
 
+    // Grab these before the dialog closes; its context is gone afterwards.
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
     if (widget.expense == null) {
-      ref.read(expensesProvider.notifier).addExpense(newExpense);
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transaction Added')));
+      final added = await ref.read(expensesProvider.notifier).addExpense(newExpense);
+      if (!added) {
+        messenger.showSnackBar(const SnackBar(content: Text('This transaction is already saved (same title, amount and date)')));
+        return;
+      }
+      navigator.pop();
+      messenger.showSnackBar(const SnackBar(content: Text('Transaction Added')));
     } else {
       final hasChanges = newExpense.title != widget.expense!.title ||
           newExpense.amount != widget.expense!.amount ||
@@ -414,8 +427,8 @@ class _ExpenseDialogState extends ConsumerState<ExpenseDialog> {
               onPressed: () {
                 Navigator.pop(ctx);
                 ref.read(expensesProvider.notifier).updateExpense(newExpense);
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transaction Updated')));
+                navigator.pop();
+                messenger.showSnackBar(const SnackBar(content: Text('Transaction Updated')));
               },
               child: const Text('Yes'),
             ),
@@ -448,9 +461,20 @@ class ThousandsSeparatorInputFormatter extends TextInputFormatter {
     String formatted = _formatter.format(value);
     if (decimalPart != null) formatted += '.$decimalPart';
 
+    // Keep the cursor the same number of characters from the end, ignoring
+    // the commas that were added or removed.
+    final rawCursor = newValue.selection.end.clamp(0, newValue.text.length);
+    final charsAfterCursor = newValue.text.substring(rawCursor).replaceAll(',', '').length;
+    var offset = formatted.length;
+    var seen = 0;
+    while (offset > 0 && seen < charsAfterCursor) {
+      offset--;
+      if (formatted[offset] != ',') seen++;
+    }
+
     return TextEditingValue(
       text: formatted,
-      selection: TextSelection.collapsed(offset: formatted.length),
+      selection: TextSelection.collapsed(offset: offset),
     );
   }
 }

@@ -73,6 +73,8 @@ class _LinkDialogState extends ConsumerState<LinkDialog> {
     final categories = [
       'All',
       ...ref.watch(linkCategoriesProvider).where((c) => c != 'All' && c != 'General'),
+      if (_selectedCategory != 'All' && !ref.watch(linkCategoriesProvider).contains(_selectedCategory))
+        _selectedCategory,
     ];
 
     return AlertDialog(
@@ -201,12 +203,27 @@ class _LinkDialogState extends ConsumerState<LinkDialog> {
       url: url.startsWith('http') ? url : 'https://$url',
       category: _selectedCategory,
       createdAt: widget.link?.createdAt,
+      isLocked: widget.link?.isLocked ?? false,
+      isPinned: widget.link?.isPinned ?? false,
+      isFavorite: widget.link?.isFavorite ?? false,
+      orderIndex: widget.link?.orderIndex ?? 0,
     );
 
+    // Shared links can arrive with an auto-detected category (e.g. "YouTube")
+    // that doesn't exist yet; create it so the link is visible under its tab.
+    if (_selectedCategory != 'All' && !ref.read(linkCategoriesProvider).contains(_selectedCategory)) {
+      ref.read(linkCategoriesProvider.notifier).addCategory(_selectedCategory);
+    }
+
+    // Grab these before the dialog closes; its context is gone afterwards.
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
     if (widget.link == null) {
-      ref.read(linkItemsProvider.notifier).addLink(linkItem);
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link Added')));
+      ref.read(linkItemsProvider.notifier).addLink(linkItem).then((added) {
+        messenger.showSnackBar(SnackBar(content: Text(added ? 'Link Added' : 'This link is already saved')));
+      });
+      navigator.pop();
     } else {
       final hasChanges = linkItem.title != widget.link!.title ||
           linkItem.url != widget.link!.url ||
@@ -228,8 +245,8 @@ class _LinkDialogState extends ConsumerState<LinkDialog> {
               onPressed: () {
                 Navigator.pop(ctx);
                 ref.read(linkItemsProvider.notifier).updateLink(linkItem);
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link Updated')));
+                navigator.pop();
+                messenger.showSnackBar(const SnackBar(content: Text('Link Updated')));
               },
               child: const Text('Yes'),
             ),

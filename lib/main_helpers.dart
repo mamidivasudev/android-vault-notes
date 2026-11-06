@@ -12,6 +12,9 @@ import 'providers.dart';
 import 'dialogs/expense_dialog.dart';
 import 'dialogs/link_dialog.dart';
 import 'views/note_editor.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'widgets/note_card.dart' show NoteColors;
 
 // --- Category Helpers ---
 
@@ -391,93 +394,125 @@ class _CategoryManagementDialogState extends State<_CategoryManagementDialog> {
 // --- Note Options ---
 
 void showNoteOptions(BuildContext context, WidgetRef ref, Note note) {
+  final hasReminder = ref.read(remindersProvider).any((r) => r.id == noteReminderId(note.id) && !r.isDismissed);
   showModalBottomSheet(
     context: context,
-    builder: (context) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: Icon(note.isLocked ? Icons.lock_open : Icons.lock, color: const Color(0xFF1D63D2)),
-            title: Text(note.isLocked ? 'Unlock' : 'Lock'),
-            onTap: () {
-              if (note.isLocked) {
-                verifyPasscode(context, ref, onSuccess: () {
+    isScrollControlled: true,
+    builder: (sheetContext) => SafeArea(
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(note.isLocked ? Icons.lock_open : Icons.lock, color: const Color(0xFF1D63D2)),
+              title: Text(note.isLocked ? 'Unlock' : 'Lock'),
+              onTap: () {
+                final messenger = ScaffoldMessenger.of(context);
+                Navigator.pop(sheetContext);
+                if (note.isLocked) {
+                  verifyPasscode(context, ref, onSuccess: () {
+                    ref.read(notesProvider.notifier).toggleLock(note.id);
+                    messenger.showSnackBar(const SnackBar(content: Text('Note Unlocked')));
+                  });
+                } else {
                   ref.read(notesProvider.notifier).toggleLock(note.id);
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Note Unlocked')));
-                });
-              } else {
-                ref.read(notesProvider.notifier).toggleLock(note.id);
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Note Locked')));
-              }
-            },
-          ),
-          if (!note.isLocked) ...[
-            ListTile(
-              leading: const Icon(Icons.camera_alt_outlined, color: Color(0xFF1D63D2)),
-              title: const Text('Scan Text (OCR)'),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (context) => NoteEditor(note: note, openOcrOnStart: true)),
-                );
+                  messenger.showSnackBar(const SnackBar(content: Text('Note Locked')));
+                }
               },
             ),
-            ListTile(
-              leading: Icon(note.isPinned ? Icons.push_pin : Icons.push_pin_outlined, color: const Color(0xFF1D63D2)),
-              title: Text(note.isPinned ? 'Unpin' : 'Pin'),
-              onTap: () {
-                ref.read(notesProvider.notifier).togglePin(note.id);
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(note.isPinned ? 'Note Unpinned' : 'Note Pinned')));
-              },
-            ),
-            ListTile(
-              leading: Icon(note.isFavorite ? Icons.favorite : Icons.favorite_border, color: Colors.pink),
-              title: Text(note.isFavorite ? 'Remove from Favorites' : 'Add to Favorites'),
-              onTap: () {
-                ref.read(notesProvider.notifier).toggleFavorite(note.id);
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(note.isFavorite ? 'Removed from Favorites' : 'Added to Favorites')));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.copy, color: Color(0xFF1D63D2)),
-              title: const Text('Copy'),
-              onTap: () {
-                Clipboard.setData(ClipboardData(text: note.content));
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.share, color: Color(0xFF1D63D2)),
-              title: const Text('Share'),
-              onTap: () {
-                Share.share("${note.title}\n\n${note.content}");
-                Navigator.pop(context);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.drive_file_move, color: Color(0xFF1D63D2)),
-              title: const Text('Move to Category'),
-              onTap: () {
-                Navigator.pop(context);
-                _moveNoteDialog(context, ref, note);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete, color: Colors.red),
-              title: const Text('Delete Note', style: TextStyle(color: Colors.red)),
-              onTap: () {
-                Navigator.pop(context);
-                _confirmDelete(context, ref, note.id);
-              },
-            ),
+            if (!note.isLocked) ...[
+              ListTile(
+                leading: const Icon(Icons.document_scanner_outlined, color: Color(0xFF1D63D2)),
+                title: const Text('Scan Text (OCR)'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (context) => NoteEditor(note: note, openOcrOnStart: true)),
+                  );
+                },
+              ),
+              ListTile(
+                leading: Icon(note.isPinned ? Icons.push_pin : Icons.push_pin_outlined, color: const Color(0xFF1D63D2)),
+                title: Text(note.isPinned ? 'Unpin' : 'Pin'),
+                onTap: () {
+                  ref.read(notesProvider.notifier).togglePin(note.id);
+                  Navigator.pop(sheetContext);
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(note.isPinned ? 'Note Unpinned' : 'Note Pinned')));
+                },
+              ),
+              ListTile(
+                leading: Icon(note.isFavorite ? Icons.favorite : Icons.favorite_border, color: Colors.pink),
+                title: Text(note.isFavorite ? 'Remove from Favorites' : 'Add to Favorites'),
+                onTap: () {
+                  ref.read(notesProvider.notifier).toggleFavorite(note.id);
+                  Navigator.pop(sheetContext);
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(note.isFavorite ? 'Removed from Favorites' : 'Added to Favorites')));
+                },
+              ),
+              ListTile(
+                leading: Icon(hasReminder ? Icons.notifications_active : Icons.notifications_none, color: const Color(0xFFF59E0B)),
+                title: Text(hasReminder ? 'Edit Reminder' : 'Set Reminder'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  setNoteReminder(context, ref, note);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.palette_outlined, color: Color(0xFF1D63D2)),
+                title: const Text('Color'),
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  final color = await pickNoteColor(context, note.colorIndex);
+                  if (color != null) {
+                    ref.read(notesProvider.notifier).updateNote(note.copyWith(colorIndex: color));
+                  }
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.copy, color: Color(0xFF1D63D2)),
+                title: const Text('Copy'),
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: noteShareText(note)));
+                  Navigator.pop(sheetContext);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.share, color: Color(0xFF1D63D2)),
+                title: const Text('Share'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  Share.share(noteShareText(note));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.ios_share, color: Color(0xFF1D63D2)),
+                title: const Text('Export'),
+                subtitle: const Text('As a .txt or PDF file'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  showNoteExportSheet(context, note);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.drive_file_move, color: Color(0xFF1D63D2)),
+                title: const Text('Move to Category'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _moveNoteDialog(context, ref, note);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete, color: Colors.red),
+                title: const Text('Delete Note', style: TextStyle(color: Colors.red)),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  deleteNotesWithUndo(context, ref, [note.id]);
+                },
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     ),
   );
@@ -487,20 +522,21 @@ void _moveNoteDialog(BuildContext context, WidgetRef ref, Note note) {
   final categories = ref.read(categoriesProvider);
   showDialog(
     context: context,
-    builder: (context) => AlertDialog(
+    builder: (dialogContext) => AlertDialog(
       title: const Text('Move to Category'),
       content: SizedBox(
         width: double.maxFinite,
         child: ListView.builder(
           shrinkWrap: true,
           itemCount: categories.length,
-          itemBuilder: (context, index) {
+          itemBuilder: (_, index) {
             final cat = categories[index];
             return ListTile(
               title: Text(cat),
+              trailing: cat == note.category ? const Icon(Icons.check, size: 18) : null,
               onTap: () {
                 ref.read(notesProvider.notifier).moveNote(note.id, cat);
-                Navigator.pop(context);
+                Navigator.pop(dialogContext);
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Note moved to $cat')));
               },
             );
@@ -511,25 +547,247 @@ void _moveNoteDialog(BuildContext context, WidgetRef ref, Note note) {
   );
 }
 
-void _confirmDelete(BuildContext context, WidgetRef ref, String id) {
-  showDialog(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Delete Note?'),
-      content: const Text('Are you sure you want to move this note to the Recycle Bin?'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        TextButton(
-          onPressed: () {
-            ref.read(notesProvider.notifier).deleteNote(id);
-            Navigator.pop(context);
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Moved to Recycle Bin')));
-          },
-          child: const Text('Delete', style: TextStyle(color: Colors.red)),
-        ),
-      ],
+/// Moves notes to the Recycle Bin and shows a snackbar with an Undo action.
+void deleteNotesWithUndo(BuildContext context, WidgetRef ref, List<String> ids) {
+  if (ids.isEmpty) return;
+  final messenger = ScaffoldMessenger.of(context);
+  ref.read(notesProvider.notifier).deleteNotes(ids);
+  messenger.hideCurrentSnackBar();
+  messenger.showSnackBar(
+    SnackBar(
+      content: Text(ids.length == 1 ? 'Note moved to Recycle Bin' : '${ids.length} notes moved to Recycle Bin'),
+      duration: const Duration(seconds: 5),
+      action: SnackBarAction(
+        label: 'UNDO',
+        onPressed: () async {
+          final bin = ref.read(deletedNotesProvider.notifier);
+          for (final id in ids) {
+            await bin.restoreNote(id);
+          }
+        },
+      ),
     ),
   );
+}
+
+/// Title + body as plain text (checklists become "☐ item" / "☑ item").
+String noteShareText(Note note) {
+  final body = note.isChecklist
+      ? ChecklistItem.parse(note.content).map((i) => '${i.checked ? '☑' : '☐'} ${i.text}').join('\n')
+      : note.content;
+  if (note.title.isEmpty) return body;
+  return '${note.title}\n\n$body';
+}
+
+/// Lets the user pick a colour label. Returns the colour index or null if cancelled.
+Future<int?> pickNoteColor(BuildContext context, int current) {
+  return showModalBottomSheet<int>(
+    context: context,
+    builder: (sheetContext) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Note color', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                for (int i = 0; i < NoteColors.swatches.length; i++)
+                  Tooltip(
+                    message: NoteColors.names[i],
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () => Navigator.pop(sheetContext, i),
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: i == 0 ? null : NoteColors.swatches[i],
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: i == current ? Theme.of(sheetContext).colorScheme.primary : Colors.grey.shade400,
+                            width: i == current ? 3 : 1,
+                          ),
+                        ),
+                        child: i == 0
+                            ? const Icon(Icons.format_color_reset, size: 20, color: Colors.grey)
+                            : (i == current ? const Icon(Icons.check, color: Colors.white, size: 20) : null),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// Adds, changes or removes the reminder attached to [note].
+Future<void> setNoteReminder(BuildContext context, WidgetRef ref, Note note) async {
+  final id = noteReminderId(note.id);
+  final existing = ref.read(remindersProvider).where((r) => r.id == id && !r.isDismissed).firstOrNull;
+  final messenger = ScaffoldMessenger.of(context);
+
+  if (existing != null) {
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Note Reminder'),
+        content: Text('Reminder set for ${DateFormat('EEE, MMM d · h:mm a').format(existing.dateTime)}'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, 'remove'), child: const Text('Remove', style: TextStyle(color: Colors.red))),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'change'), child: const Text('Change')),
+        ],
+      ),
+    );
+    if (action == 'remove') {
+      await ref.read(remindersProvider.notifier).deleteReminder(id);
+      messenger.showSnackBar(const SnackBar(content: Text('Reminder removed')));
+      return;
+    }
+    if (action != 'change') return;
+  }
+  if (!context.mounted) return;
+
+  final now = DateTime.now();
+  final initial = existing?.dateTime ?? now.add(const Duration(hours: 1));
+  final date = await showDatePicker(
+    context: context,
+    initialDate: initial.isBefore(now) ? now : initial,
+    firstDate: DateTime(now.year, now.month, now.day),
+    lastDate: DateTime(now.year + 5),
+  );
+  if (date == null || !context.mounted) return;
+  final time = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(initial));
+  if (time == null) return;
+
+  final when = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+  if (!when.isAfter(DateTime.now())) {
+    messenger.showSnackBar(const SnackBar(content: Text('Pick a time in the future')));
+    return;
+  }
+
+  final title = note.title.isEmpty ? 'Note reminder' : note.title;
+  final description = note.isLocked ? 'Open Vault Notes to view this note' : ChecklistItem.toPlainText(note.content).trim();
+  final shortDesc = description.length > 120 ? '${description.substring(0, 120)}…' : description;
+  final notifier = ref.read(remindersProvider.notifier);
+  final anyExisting = ref.read(remindersProvider).where((r) => r.id == id).firstOrNull;
+  if (anyExisting != null) {
+    await notifier.updateReminder(anyExisting.copyWith(title: title, description: shortDesc, dateTime: when, isDismissed: false));
+  } else {
+    await notifier.addReminder(Reminder(id: id, title: title, description: shortDesc, dateTime: when));
+  }
+  messenger.showSnackBar(SnackBar(content: Text('Reminder set for ${DateFormat('EEE, MMM d · h:mm a').format(when)}')));
+}
+
+void showNoteExportSheet(BuildContext context, Note note) {
+  showModalBottomSheet(
+    context: context,
+    builder: (sheetContext) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.description_outlined, color: Color(0xFF1D63D2)),
+            title: const Text('Export as .txt'),
+            onTap: () {
+              Navigator.pop(sheetContext);
+              exportNote(context, note, asPdf: false);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.picture_as_pdf_outlined, color: Colors.red),
+            title: const Text('Export as PDF'),
+            onTap: () {
+              Navigator.pop(sheetContext);
+              exportNote(context, note, asPdf: true);
+            },
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+Future<void> exportNote(BuildContext context, Note note, {required bool asPdf}) async {
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    final dir = await getTemporaryDirectory();
+    final safeName = (note.title.isEmpty ? 'note' : note.title)
+        .replaceAll(RegExp(r'[^\w\s-]'), '')
+        .trim()
+        .replaceAll(RegExp(r'\s+'), '_');
+    final baseName = safeName.isEmpty ? 'note' : (safeName.length > 50 ? safeName.substring(0, 50) : safeName);
+
+    late File file;
+    if (asPdf) {
+      // Use the device's Roboto font when available so symbols like ₹ render.
+      pw.Font? font;
+      pw.Font? fontBold;
+      try {
+        final regular = File('/system/fonts/Roboto-Regular.ttf');
+        if (await regular.exists()) font = pw.Font.ttf((await regular.readAsBytes()).buffer.asByteData());
+        final bold = File('/system/fonts/Roboto-Bold.ttf');
+        if (await bold.exists()) fontBold = pw.Font.ttf((await bold.readAsBytes()).buffer.asByteData());
+      } catch (_) {}
+
+      final doc = pw.Document(theme: font == null ? null : pw.ThemeData.withFont(base: font, bold: fontBold ?? font));
+      final meta = 'Created ${DateFormat('MMM d, yyyy h:mm a').format(note.createdAt)}'
+          '${note.updatedAt != null ? '  ·  Edited ${DateFormat('MMM d, yyyy h:mm a').format(note.updatedAt!)}' : ''}'
+          '  ·  #${note.category}';
+      doc.addPage(pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(40),
+        build: (_) => [
+          pw.Text(note.title.isEmpty ? 'Untitled Note' : note.title,
+              style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 6),
+          pw.Text(meta, style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
+          pw.Divider(),
+          if (note.isChecklist)
+            ...ChecklistItem.parse(note.content).map((i) => pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                  child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+                    pw.Container(
+                      width: 10,
+                      height: 10,
+                      margin: const pw.EdgeInsets.only(top: 2, right: 8),
+                      decoration: pw.BoxDecoration(
+                        border: pw.Border.all(width: 1),
+                        color: i.checked ? PdfColors.grey600 : null,
+                      ),
+                    ),
+                    pw.Expanded(
+                      child: pw.Text(i.text,
+                          style: pw.TextStyle(
+                              fontSize: 12, decoration: i.checked ? pw.TextDecoration.lineThrough : null)),
+                    ),
+                  ]),
+                ))
+          else
+            // One paragraph per line so long notes can break across pages.
+            ...note.content.split('\n').map((line) => pw.Padding(
+                  padding: const pw.EdgeInsets.only(bottom: 3),
+                  child: pw.Text(line, style: const pw.TextStyle(fontSize: 12, lineSpacing: 3)),
+                )),
+        ],
+      ));
+      file = File('${dir.path}/$baseName.pdf');
+      await file.writeAsBytes(await doc.save());
+    } else {
+      file = File('${dir.path}/$baseName.txt');
+      await file.writeAsString(noteShareText(note));
+    }
+    await Share.shareXFiles([XFile(file.path)], subject: note.title.isEmpty ? 'Note' : note.title);
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('Export failed: $e')));
+  }
 }
 
 // --- Expense Options ---
@@ -671,9 +929,8 @@ void createNewNote(BuildContext context, WidgetRef ref) {
     MaterialPageRoute(
       builder: (context) => NoteEditor(
         note: Note(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          title: '', 
-          content: '', 
+          title: '',
+          content: '',
           category: selectedCat,
         ), 
         isNew: true,
@@ -734,10 +991,14 @@ void _renameCategoryManual(BuildContext context, WidgetRef ref, String oldName) 
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         TextButton(
           onPressed: () {
-            if (controller.text.isNotEmpty) {
-              ref.read(categoriesProvider.notifier).renameCategory(oldName, controller.text);
-              Navigator.pop(context);
+            final newName = controller.text.trim();
+            if (newName.isEmpty) return;
+            if (newName != oldName && ref.read(categoriesProvider).contains(newName)) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('A category named "$newName" already exists')));
+              return;
             }
+            ref.read(categoriesProvider.notifier).renameCategory(oldName, newName);
+            Navigator.pop(context);
           },
           child: const Text('Rename'),
         ),
@@ -751,7 +1012,7 @@ void _confirmDeleteCategory(BuildContext context, WidgetRef ref, String category
     context: context,
     builder: (context) => AlertDialog(
       title: const Text('Delete Category?'),
-      content: Text('Are you sure you want to delete "$category"? All notes in this category will be moved to "General".'),
+      content: Text('Are you sure you want to delete "$category"? All notes in this category will be moved to the Recycle Bin.'),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         TextButton(
@@ -808,10 +1069,14 @@ void _renameLinkCategoryManual(BuildContext context, WidgetRef ref, String oldNa
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         TextButton(
           onPressed: () {
-            if (controller.text.isNotEmpty) {
-              ref.read(linkCategoriesProvider.notifier).renameCategory(oldName, controller.text);
-              Navigator.pop(context);
+            final newName = controller.text.trim();
+            if (newName.isEmpty) return;
+            if (newName != oldName && ref.read(linkCategoriesProvider).contains(newName)) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('A category named "$newName" already exists')));
+              return;
             }
+            ref.read(linkCategoriesProvider.notifier).renameCategory(oldName, newName);
+            Navigator.pop(context);
           },
           child: const Text('Rename'),
         ),
@@ -972,10 +1237,14 @@ void _renameExpenseCategory(BuildContext context, WidgetRef ref, String oldName)
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         TextButton(
           onPressed: () {
-            if (controller.text.isNotEmpty) {
-              ref.read(expenseCategoriesProvider.notifier).renameCategory(oldName, controller.text);
-              Navigator.pop(context);
+            final newName = controller.text.trim();
+            if (newName.isEmpty) return;
+            if (newName != oldName && ref.read(expenseCategoriesProvider).contains(newName)) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('A category named "$newName" already exists')));
+              return;
             }
+            ref.read(expenseCategoriesProvider.notifier).renameCategory(oldName, newName);
+            Navigator.pop(context);
           },
           child: const Text('Rename'),
         ),

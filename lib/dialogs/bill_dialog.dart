@@ -430,13 +430,19 @@ class _BillDialogState extends ConsumerState<BillDialog> {
       reminderMinute: _reminderTime.minute,
       isPaid: widget.bill?.isPaid ?? false,
       lastPaidDate: widget.bill?.lastPaidDate,
+      // Must be kept: it stops a payment from being counted twice.
+      lastEmiPaidMonth: widget.bill?.lastEmiPaidMonth,
       reminderEnabled: _reminderEnabled,
       type: _type,
       note: _noteController.text.trim().isNotEmpty ? _noteController.text.trim() : null,
       totalLoanAmount: _type == 'Loan' && _totalLoanAmountController.text.trim().isNotEmpty ? double.tryParse(_totalLoanAmountController.text.trim().replaceAll(',', '')) : null,
       emiAmount: _type == 'Loan' && _emiAmountController.text.trim().isNotEmpty ? double.tryParse(_emiAmountController.text.trim().replaceAll(',', '')) : null,
       totalEmis: _type == 'Loan' && _totalEmisController.text.trim().isNotEmpty ? int.tryParse(_totalEmisController.text.trim()) : null,
-      paidEmis: _type == 'Loan' && _paidEmisController.text.trim().isNotEmpty ? int.tryParse(_paidEmisController.text.trim()) : null,
+      // Credit cards have no EMI field in this form, so keep their paid count
+      // (it drives the "Paid months" history) instead of wiping it on edit.
+      paidEmis: _type == 'Loan'
+          ? (_paidEmisController.text.trim().isNotEmpty ? int.tryParse(_paidEmisController.text.trim()) : null)
+          : widget.bill?.paidEmis,
       interestRate: _type == 'Loan' && _interestRateController.text.trim().isNotEmpty ? double.tryParse(_interestRateController.text.trim()) : null,
     );
 
@@ -458,21 +464,15 @@ class _BillDialogState extends ConsumerState<BillDialog> {
       ref.read(billsProvider.notifier).updateBill(newBill);
     }
 
-    // Schedule notification(s)
-    await NotificationService().scheduleBillNotifications(
-      billId: newBill.id,
-      title: 'Bill Reminder: $title',
-      dueDay: _dueDay,
-      reminderDaysBeforeList: _reminderDaysList,
-      hour: _reminderTime.hour,
-      minute: _reminderTime.minute,
-      enabled: _reminderEnabled,
-    );
+    if (!mounted) return;
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
 
-    if (mounted) {
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(widget.bill == null ? 'Bill Tracker Added' : 'Bill Updated'), duration: const Duration(milliseconds: 1500)));
-    }
+    // Schedule notification(s) (skips the cycle that is already paid)
+    await NotificationService().scheduleBillNotificationsFor(newBill);
+
+    navigator.pop();
+    messenger.showSnackBar(SnackBar(content: Text(widget.bill == null ? 'Bill Tracker Added' : 'Bill Updated'), duration: const Duration(milliseconds: 1500)));
   }
 
   String _getSuffix(int day) {

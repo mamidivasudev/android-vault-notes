@@ -929,6 +929,8 @@ class _DocumentFormScreenState extends State<DocumentFormScreen> {
 
       if (_expiryDate != null) {
         await NotificationService().scheduleExpiryReminder(docId, doc.title, _expiryDate!);
+      } else {
+        await NotificationService().cancelReminders(docId);
       }
 
       if (mounted) {

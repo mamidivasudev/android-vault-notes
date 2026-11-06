@@ -16,7 +16,6 @@ import 'views/notes_view.dart';
 import 'views/expenses_view.dart';
 import 'views/links_view.dart';
 import 'views/tables_view.dart';
-import 'views/cards_view.dart';
 import 'views/recycle_bin_view.dart';
 import 'views/note_editor.dart';
 import 'views/reminders_view.dart';
@@ -24,6 +23,7 @@ import 'views/bills_view.dart';
 import 'views/mileage_view.dart';
 import 'views/grocery_view.dart';
 import 'main_helpers.dart';
+import 'utils/undo_helpers.dart';
 import 'dialogs/link_dialog.dart';
 import 'dialogs/expense_dialog.dart';
 import 'dialogs/bill_dialog.dart';
@@ -33,6 +33,7 @@ import 'package:provider/provider.dart' as doc_provider;
 import 'docs_feature/services/local_storage_service.dart' as doc_storage;
 import 'docs_feature/providers/document_provider.dart';
 import 'docs_feature/screens/home_screen.dart';
+import 'docs_feature/services/auth_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -66,6 +67,7 @@ class MyNotesApp extends ConsumerWidget {
       ),
       themeMode: themeMode,
       home: const MainScreen(),
+      
     );
   }
 }
@@ -216,6 +218,28 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     });
 
     _loadAppLockState();
+
+    // Route notification actions (Done / Snooze) through the provider while the
+    // app is running, so the in-memory list and the file never disagree.
+    NotificationService.foregroundActionHandler = _handleReminderAction;
+  }
+
+  Future<void> _handleReminderAction(String actionId, String reminderId) async {
+    final notifier = ref.read(remindersProvider.notifier);
+    await notifier.ready;
+    final matches = ref.read(remindersProvider).where((r) => r.id == reminderId);
+    if (matches.isEmpty) return;
+    final reminder = matches.first;
+    if (actionId == 'action_done') {
+      // updateReminder rolls repeating reminders forward automatically.
+      await notifier.updateReminder(reminder.copyWith(isDismissed: true));
+    } else if (actionId == 'action_snooze_1h' || actionId == 'action_snooze_1d') {
+      await notifier.updateReminder(reminder.copyWith(
+        dateTime: DateTime.now().add(actionId == 'action_snooze_1h' ? const Duration(hours: 1) : const Duration(days: 1)),
+        isDismissed: false,
+        referenceDate: reminder.referenceDate ?? reminder.dateTime, // series keeps its schedule
+      ));
+    }
   }
 
   void _handleSharedText(String text) {
@@ -267,6 +291,9 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     _syncAnimationController.dispose();
     _searchController.dispose();
     _intentDataStreamSubscription.cancel();
+    if (NotificationService.foregroundActionHandler == _handleReminderAction) {
+      NotificationService.foregroundActionHandler = null;
+    }
     super.dispose();
   }
 
@@ -307,12 +334,17 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
         });
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Sync successful!'), backgroundColor: Colors.green),
+          SnackBar(content: Text(ref.read(syncProvider.notifier).lastMessage ?? 'Sync successful!'), backgroundColor: Colors.green),
         );
       } else if (next == SyncStatus.error) {
+        final detail = ref.read(syncProvider.notifier).lastMessage;
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Sync failed. Please check connection or configuration.'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('Sync failed. ${detail ?? 'Please check connection or configuration.'}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 6),
+          ),
         );
       } else if (next == SyncStatus.idle && previous == SyncStatus.syncing) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -326,12 +358,17 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
 
     if (vaultPath.value != null && !_hasPurgedTrash) {
       _hasPurgedTrash = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        ref.read(vaultServiceProvider).purgeOldDeletedItems().then((_) {
-          ref.invalidate(deletedNotesProvider);
-          ref.invalidate(deletedExpensesProvider);
-          ref.invalidate(deletedLinksProvider);
-        });
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        final vault = ref.read(vaultServiceProvider);
+        // One local snapshot a day (kept in .vault_backups), taken before the
+        // Recycle Bin purge so nothing is ever removed without a copy.
+        await vault.dailyBackupIfNeeded();
+        await vault.purgeOldDeletedItems();
+        ref.invalidate(deletedNotesProvider);
+        ref.invalidate(deletedExpensesProvider);
+        ref.invalidate(deletedLinksProvider);
+        // Bill/monthly reminders are scheduled a few cycles ahead; top them up.
+        await rescheduleAllNotifications(vault, askPermission: false);
       });
     }
 
@@ -433,14 +470,14 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
         ),
       );
     }
-    final activeReminders = ref.watch(activeRemindersProvider);
     final selectedNotes = ref.watch(selectedNotesProvider);
     final selectedExpenses = ref.watch(selectedExpensesProvider);
     final selectedLinks = ref.watch(selectedLinksProvider);
     final selectedReminders = ref.watch(selectedRemindersProvider);
     final selectedBills = ref.watch(selectedBillsProvider);
+    final selectedGrocery = ref.watch(selectedGroceryProvider);
     final isEditingTable = ref.watch(editingTableProvider) != null;
-    final isSelectionMode = selectedNotes.isNotEmpty || selectedExpenses.isNotEmpty || selectedLinks.isNotEmpty || selectedReminders.isNotEmpty || selectedBills.isNotEmpty;
+    final isSelectionMode = ref.watch(isSelectionModeProvider) || selectedNotes.isNotEmpty || selectedExpenses.isNotEmpty || selectedLinks.isNotEmpty || selectedReminders.isNotEmpty || selectedBills.isNotEmpty || selectedGrocery.isNotEmpty;
 
     return PopScope(
       canPop: false,
@@ -458,11 +495,19 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
           ref.read(selectedNotesProvider.notifier).clear();
           ref.read(selectedExpensesProvider.notifier).clear();
           ref.read(selectedLinksProvider.notifier).clear();
+          ref.read(isSelectionModeProvider.notifier).setState(false);
           ref.read(selectedRemindersProvider.notifier).clear();
+          ref.read(selectedBillsProvider.notifier).clear();
+          ref.read(selectedGroceryProvider.notifier).clear();
           return;
         }
         if (isEditingTable) {
-          ref.read(editingTableProvider.notifier).state = null;
+          final requestClose = TableEditorDialog.onBackRequested;
+          if (requestClose != null) {
+            await requestClose();
+          } else {
+            ref.read(editingTableProvider.notifier).state = null;
+          }
           return;
         }
         if (_currentIndex != 0) {
@@ -508,14 +553,17 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                     ),
                     child: NavigationBar(
                       selectedIndex: navIndex,
-                      onDestinationSelected: (index) {
+                      onDestinationSelected: (index) async {
+                        final target = visibleTabs[index].stateIndex;
+                        if (target == 8 && _currentIndex != 8 && await AuthService.isBiometricEnabled()) {
+                          final ok = await AuthService.authenticateBiometrics();
+                          if (!ok || !mounted) return;
+                        }
                         setState(() {
-                          _currentIndex = visibleTabs[index].stateIndex;
+                          _currentIndex = target;
                           _isSearching = false;
                           _searchController.clear();
                           ref.read(searchQueryProvider.notifier).state = '';
-                          // Auto-lock any revealed card when leaving Cards tab
-                          ref.read(revealedCardIdProvider.notifier).setRevealed(null);
                         });
                       },
                       destinations: visibleTabs.map((t) => 
@@ -864,6 +912,9 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                               sortLabel = 'Date (Oldest)';
                             } else if (sortOrder == NoteSortOrder.atoz) sortLabel = 'Title (A-Z)';
                             else if (sortOrder == NoteSortOrder.ztoa) sortLabel = 'Title (Z-A)';
+                            else if (sortOrder == NoteSortOrder.modifiedNewest) sortLabel = 'Last Edited';
+                            else if (sortOrder == NoteSortOrder.manual) sortLabel = 'Manual (Drag)';
+                            if (ref.watch(notesGridViewProvider)) sortLabel = '$sortLabel · Grid';
 
                             return InkWell(
                               onTap: () {
@@ -1223,70 +1274,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                           },
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      // Secure Cards Card
-                      Expanded(
-                        child: Consumer(
-                          builder: (context, ref, _) {
-                            final isDark = ref.watch(themeModeProvider) == ThemeMode.dark;
-                            return InkWell(
-                              onTap: () {
-                                Navigator.pop(context);
-                                setState(() => _currentIndex = 6);
-                              },
-                              borderRadius: BorderRadius.circular(12),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: isDark 
-                                      ? Colors.blue.withOpacity(0.08) 
-                                      : const Color(0xFFF1F5F9),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: isDark 
-                                        ? Colors.blue.withOpacity(0.15) 
-                                        : const Color(0xFFE2E8F0),
-                                  ),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Icon(
-                                          Icons.credit_card,
-                                          color: Color(0xFF7C3AED),
-                                          size: 20,
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'Secure Cards',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                        color: isDark ? Colors.white70 : Colors.black87,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      'Protected data',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: isDark ? Colors.white38 : Colors.black54,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -1394,15 +1381,9 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
   }
 
   void _showBackupSelectionDialog() {
-    final List<String> backupFiles = [
-      'notes_data.json',
-      'expenses_data.json',
-      'links_data.json',
-      'tables_data.json',
-      'bills_data.json',
-      'docs_data',
-    ];
-    
+    // Same list restore uses, so nothing can be left out of one side again.
+    final List<String> backupFiles = [...kVaultDataFiles, kDocsBackupKey];
+
     final Map<String, Map<String, dynamic>> fileInfo = {
       'notes_data.json': {'name': 'Notes', 'icon': Icons.description, 'color': Colors.amber},
       'expenses_data.json': {'name': 'Expenses', 'icon': Icons.account_balance_wallet, 'color': Colors.green},
@@ -1410,6 +1391,13 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
       'tables_data.json': {'name': 'Tables & Formulas', 'icon': Icons.table_chart, 'color': Colors.teal},
       'bills_data.json': {'name': 'Bills & Loans', 'icon': Icons.receipt_long, 'color': Colors.orange},
       'docs_data': {'name': 'Docs (Images & Data)', 'icon': Icons.folder, 'color': Colors.cyan},
+      'mileage_data.json': {'name': 'Fuel History', 'icon': Icons.local_gas_station, 'color': Colors.deepPurple},
+      'service_data.json': {'name': 'Service History', 'icon': Icons.build, 'color': Colors.deepOrange},
+      'reminders_data.json': {'name': 'Reminders', 'icon': Icons.alarm, 'color': Colors.amber},
+      'monthly_reports.json': {'name': 'Monthly Reports', 'icon': Icons.bar_chart, 'color': Colors.indigo},
+      'deleted_data.json': {'name': 'Recycle Bin', 'icon': Icons.delete_outline, 'color': Colors.red},
+      'profiles_data.json': {'name': 'Sound Profiles', 'icon': Icons.volume_up, 'color': Colors.blueGrey},
+      'app_settings.json': {'name': 'Grocery, Budgets & Settings', 'icon': Icons.shopping_cart, 'color': Colors.lightGreen},
     };
     
     Set<String> selectedFiles = Set.from(backupFiles);
@@ -1419,7 +1407,8 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
           title: const Text('Select items to Backup'),
-          content: Column(
+          content: SingleChildScrollView(
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             children: backupFiles.map((file) {
               final info = fileInfo[file] ?? {'name': file, 'icon': Icons.insert_drive_file, 'color': Colors.grey};
@@ -1446,6 +1435,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                 contentPadding: EdgeInsets.zero,
               );
             }).toList(),
+          ),
           ),
           actions: [
             TextButton(
@@ -1663,25 +1653,42 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
               _buildSortRadioItem(outerRef, NoteSortOrder.dateOldest, 'Date (Oldest)', currentSort),
               _buildSortRadioItem(outerRef, NoteSortOrder.atoz, 'Title (A-Z)', currentSort),
               _buildSortRadioItem(outerRef, NoteSortOrder.ztoa, 'Title (Z-A)', currentSort),
+              _buildSortRadioItem(outerRef, NoteSortOrder.modifiedNewest, 'Last Edited', currentSort),
+              _buildSortRadioItem(outerRef, NoteSortOrder.manual, 'Manual (drag to reorder)', currentSort),
               const SizedBox(height: 8),
-              GestureDetector(
-                onTap: () {
-                  outerRef.read(lockProvider.notifier).setLock('1851421');
-                  Navigator.pop(sheetContext);
+              Consumer(
+                builder: (_, innerRef, _) {
+                  final isGrid = innerRef.watch(notesGridViewProvider);
+                  return Row(
+                    children: [
+                      const Text('Layout', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                      const Spacer(),
+                      SegmentedButton<bool>(
+                        segments: const [
+                          ButtonSegment(value: false, icon: Icon(Icons.view_agenda_outlined), label: Text('List')),
+                          ButtonSegment(value: true, icon: Icon(Icons.grid_view), label: Text('Grid')),
+                        ],
+                        selected: {isGrid},
+                        onSelectionChanged: (v) => innerRef.read(notesGridViewProvider.notifier).state = v.first,
+                      ),
+                    ],
+                  );
                 },
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  alignment: Alignment.center,
-                  child: Text(
-                    'reset p',
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: isDark ? Colors.white12 : Colors.black12,
-                    ),
+              ),
+              Consumer(
+                builder: (_, innerRef, _) => SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Swipe actions on notes', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                  subtitle: const Text(
+                    'Swipe right to pin, left to delete. Use the category chips to switch categories while on.',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
                   ),
+                  value: innerRef.watch(notesSwipeActionsProvider),
+                  activeThumbColor: const Color(0xFF1D63D2),
+                  onChanged: (v) => innerRef.read(notesSwipeActionsProvider.notifier).state = v,
                 ),
               ),
+              const SizedBox(height: 8),
               const Divider(),
               Consumer(
                 builder: (consumerContext, innerRef, _) {
@@ -1822,40 +1829,57 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
           ref.read(selectedLinksProvider.notifier).clear();
           ref.read(selectedRemindersProvider.notifier).clear();
           ref.read(selectedBillsProvider.notifier).clear();
+          ref.read(selectedGroceryProvider.notifier).clear();
         }),
         title: Text(() {
           if (_currentIndex == 0) return '$noteCount selected';
           if (_currentIndex == 1) return '$expCount selected';
-          if (_currentIndex == 4) return '${ref.watch(selectedBillsProvider).length} selected';
+          if (_currentIndex == 7) return '${ref.watch(selectedBillsProvider).length} selected';
           if (_currentIndex == 5) return '${ref.watch(selectedRemindersProvider).length} selected';
+          if (_currentIndex == 10) return '${ref.watch(selectedGroceryProvider).length} selected';
           return '${ref.watch(selectedLinksProvider).length} selected';
         }()),
         actions: [
           IconButton(
-            icon: const Icon(Icons.select_all),
-            onPressed: _currentIndex == 0 
-                ? _selectAllNotes 
-                : (_currentIndex == 1 
-                    ? _selectAllExpenses 
-                    : (_currentIndex == 4
+            icon: Icon(
+              (() {
+                if (_currentIndex == 0) {
+                  ref.watch(notesProvider);
+                  ref.watch(selectedCategoryProvider);
+                  final visible = _visibleNoteIds(ref);
+                  final selected = ref.watch(selectedNotesProvider);
+                  return (visible.isNotEmpty && visible.every(selected.contains)) ? Icons.check_box : Icons.check_box_outline_blank;
+                }
+                if (_currentIndex == 1) return (ref.watch(selectedExpensesProvider).length == ref.watch(expensesProvider).length && ref.watch(expensesProvider).isNotEmpty) ? Icons.check_box : Icons.check_box_outline_blank;
+                if (_currentIndex == 7) return (ref.watch(selectedBillsProvider).length == ref.watch(billsProvider).length && ref.watch(billsProvider).isNotEmpty) ? Icons.check_box : Icons.check_box_outline_blank;
+                if (_currentIndex == 5) return (ref.watch(selectedRemindersProvider).length == ref.watch(remindersProvider).length && ref.watch(remindersProvider).isNotEmpty) ? Icons.check_box : Icons.check_box_outline_blank;
+                if (_currentIndex == 10) return (ref.watch(selectedGroceryProvider).length == ref.watch(groceryProvider).length && ref.watch(groceryProvider).isNotEmpty) ? Icons.check_box : Icons.check_box_outline_blank;
+                return (ref.watch(selectedLinksProvider).length == ref.watch(linkItemsProvider).length && ref.watch(linkItemsProvider).isNotEmpty) ? Icons.check_box : Icons.check_box_outline_blank;
+              })()
+            ),
+            onPressed: _currentIndex == 0
+                ? _selectAllNotes
+                : (_currentIndex == 1
+                    ? _selectAllExpenses
+                    : (_currentIndex == 7
                         ? _selectAllBills
                         : (_currentIndex == 5 
                             ? _selectAllReminders 
-                            : _selectAllLinks))),
+                            : (_currentIndex == 10 ? _selectAllGrocery : _selectAllLinks)))),
           ),
           IconButton(
             icon: const Icon(Icons.delete, color: Colors.red),
-            onPressed: _currentIndex == 0 
-                ? _deleteSelectedNotes 
-                : (_currentIndex == 1 
-                    ? _deleteSelectedExpenses 
-                    : (_currentIndex == 4
+            onPressed: _currentIndex == 0
+                ? _deleteSelectedNotes
+                : (_currentIndex == 1
+                    ? _deleteSelectedExpenses
+                    : (_currentIndex == 7
                         ? _deleteSelectedBills
                         : (_currentIndex == 5 
                             ? _deleteSelectedReminders 
-                            : _deleteSelectedLinks))),
+                            : (_currentIndex == 10 ? _deleteSelectedGrocery : _deleteSelectedLinks)))),
           ),
-          if (_currentIndex != 5)
+          if (_currentIndex == 0 || _currentIndex == 1 || _currentIndex == 2)
             IconButton(
               icon: const Icon(Icons.drive_file_move),
               onPressed: _currentIndex == 0 
@@ -1891,7 +1915,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
             )
           : RichText(
               text: TextSpan(
-                text: _currentIndex == 1 ? 'My Expenses' : (_currentIndex == 2 ? 'My Links' : (_currentIndex == 3 ? 'My Tables' : (_currentIndex == 4 ? 'Recycle Bin' : (_currentIndex == 5 ? 'Reminders' : (_currentIndex == 6 ? 'Secure Cards' : (_currentIndex == 7 ? 'Bills & Subscriptions' : 'My Notes')))))),
+                 text: _currentIndex == 1 ? 'My Expenses' : (_currentIndex == 2 ? 'My Links' : (_currentIndex == 3 ? 'My Tables' : (_currentIndex == 4 ? 'Recycle Bin' : (_currentIndex == 5 ? 'Reminders' : (_currentIndex == 7 ? 'Bills & Subscriptions' : (_currentIndex == 10 ? ' Grocery' : 'My Notes')))))),
                 style: GoogleFonts.lexend(fontSize: 18, fontWeight: FontWeight.bold, color: const Color(0xFF1D63D2)),
                 children: [
                   if (_currentIndex == 0) ...[
@@ -1961,8 +1985,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                   _isSearching = false;
                   _searchController.clear();
                   ref.read(searchQueryProvider.notifier).state = '';
-                  // Auto-lock any revealed card when closing Cards view
-                  ref.read(revealedCardIdProvider.notifier).setRevealed(null);
                 });
               },
             ),
@@ -2083,10 +2105,9 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     }
     if (_currentIndex == 4) return const RecycleBinView();
     if (_currentIndex == 5) return const RemindersView();
-    if (_currentIndex == 6) return const CardsView();
     if (_currentIndex == 7) return const BillsView();
     if (_currentIndex == 8) return const DocsHomeScreen();
-    if (_currentIndex == 9) return const MileageView();
+    if (_currentIndex == 9) return MileageView(onGlobalSync: _exportData);
     if (_currentIndex == 10) return const GroceryView();
     return IndexedStack(index: _currentIndex, children: const [NotesView(), ExpensesView(), LinksView(), TablesView()]);
   }
@@ -2213,9 +2234,8 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
         Navigator.of(context).push(MaterialPageRoute(
           builder: (context) => NoteEditor(
             note: Note(
-              id: DateTime.now().millisecondsSinceEpoch.toString(),
-              title: '', 
-              content: '', 
+              title: '',
+              content: '',
               category: selectedCat
             ), 
             isNew: true
@@ -2257,9 +2277,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
           builder: (context) => const ReminderDialog(),
         );
         break;
-      case 6:
-        showCardEditorDialog(context, ref);
-        break;
       case 7:
         showDialog(
           context: context,
@@ -2270,43 +2287,115 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     }
   }
 
-  void _selectAllNotes() {
-    final currentCat = ref.read(selectedCategoryProvider);
-    final allNotesInCat = ref.read(notesProvider).where((n) => n.category == currentCat).map((n) => n.id).toSet();
-    ref.read(selectedNotesProvider.notifier).selectAll(allNotesInCat);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${allNotesInCat.length} notes selected')));
+
+
+  void _selectAllGrocery() {
+    ref.read(isSelectionModeProvider.notifier).setState(true);
+    final allIds = ref.read(groceryProvider).map((g) => g.id).toSet();
+    final selectedIds = ref.read(selectedGroceryProvider);
+    
+    if (selectedIds.length == allIds.length && allIds.isNotEmpty) {
+      ref.read(selectedGroceryProvider.notifier).clear();
+    } else {
+      ref.read(selectedGroceryProvider.notifier).selectAll(allIds);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${allIds.length} groceries selected')));
+    }
   }
 
+  void _deleteSelectedGrocery() {
+    final ids = ref.read(selectedGroceryProvider);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Groceries?'),
+        content: Text('Delete ${ids.length} selected items?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              deleteGroceryWithUndo(this.context, ref, Set<String>.from(ids));
+              ref.read(selectedGroceryProvider.notifier).clear();
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Ids of the notes currently visible in the Notes tab (respects category,
+  /// favourites filter and search).
+  Set<String> _visibleNoteIds(WidgetRef ref) {
+    final categories = ref.read(categoriesProvider);
+    var currentCat = ref.read(selectedCategoryProvider);
+    if (!categories.contains(currentCat) && categories.isNotEmpty) currentCat = categories.first;
+    final searching = ref.read(searchQueryProvider).isNotEmpty;
+    final scope = searching && !ref.read(notesSearchInCategoryProvider) ? '' : currentCat;
+    return ref.read(filteredNotesProvider(scope)).map((n) => n.id).toSet();
+  }
+
+  void _selectAllNotes() {
+    ref.read(isSelectionModeProvider.notifier).setState(true);
+    final allIds = _visibleNoteIds(ref);
+    final selectedIds = ref.read(selectedNotesProvider);
+    if (allIds.isNotEmpty && allIds.every(selectedIds.contains)) {
+      ref.read(selectedNotesProvider.notifier).clear();
+    } else {
+      ref.read(selectedNotesProvider.notifier).selectAll(allIds);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${allIds.length} notes selected')));
+    }
+  }
   void _selectAllExpenses() {
+    ref.read(isSelectionModeProvider.notifier).setState(true);
     final currentCat = ref.read(selectedExpenseCategoryProvider);
     final expenses = ref.read(expensesProvider);
     final filtered = currentCat == 'All' ? expenses : expenses.where((e) => e.category == currentCat);
-    final selectedIds = filtered.map((e) => e.id).toSet();
-    ref.read(selectedExpensesProvider.notifier).selectAll(selectedIds);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${selectedIds.length} expenses selected')));
+    final allIds = filtered.map((e) => e.id).toSet();
+    final selectedIds = ref.read(selectedExpensesProvider);
+    if (selectedIds.length == allIds.length && allIds.isNotEmpty) {
+      ref.read(selectedExpensesProvider.notifier).clear();
+    } else {
+      ref.read(selectedExpensesProvider.notifier).selectAll(allIds);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${allIds.length} expenses selected')));
+    }
   }
-
   void _selectAllLinks() {
+    ref.read(isSelectionModeProvider.notifier).setState(true);
     final currentCat = ref.read(selectedLinkCategoryProvider);
     final links = ref.read(linkItemsProvider);
     final filtered = currentCat == 'All' ? links : links.where((l) => l.category == currentCat);
-    final selectedIds = filtered.map((l) => l.id).toSet();
-    ref.read(selectedLinksProvider.notifier).selectAll(selectedIds);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${selectedIds.length} links selected')));
+    final allIds = filtered.map((l) => l.id).toSet();
+    final selectedIds = ref.read(selectedLinksProvider);
+    if (selectedIds.length == allIds.length && allIds.isNotEmpty) {
+      ref.read(selectedLinksProvider.notifier).clear();
+    } else {
+      ref.read(selectedLinksProvider.notifier).selectAll(allIds);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${allIds.length} links selected')));
+    }
   }
-
   void _selectAllReminders() {
-    final ids = ref.read(remindersProvider).map((r) => r.id).toSet();
-    ref.read(selectedRemindersProvider.notifier).selectAll(ids);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${ids.length} reminders selected')));
+    ref.read(isSelectionModeProvider.notifier).setState(true);
+    final allIds = ref.read(remindersProvider).map((r) => r.id).toSet();
+    final selectedIds = ref.read(selectedRemindersProvider);
+    if (selectedIds.length == allIds.length && allIds.isNotEmpty) {
+      ref.read(selectedRemindersProvider.notifier).clear();
+    } else {
+      ref.read(selectedRemindersProvider.notifier).selectAll(allIds);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${allIds.length} reminders selected')));
+    }
   }
-
   void _selectAllBills() {
-    final ids = ref.read(billsProvider).map((b) => b.id).toSet();
-    ref.read(selectedBillsProvider.notifier).selectAll(ids);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${ids.length} bills selected')));
+    ref.read(isSelectionModeProvider.notifier).setState(true);
+    final allIds = ref.read(billsProvider).map((b) => b.id).toSet();
+    final selectedIds = ref.read(selectedBillsProvider);
+    if (selectedIds.length == allIds.length && allIds.isNotEmpty) {
+      ref.read(selectedBillsProvider.notifier).clear();
+    } else {
+      ref.read(selectedBillsProvider.notifier).selectAll(allIds);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${allIds.length} bills selected')));
+    }
   }
-
   void _deleteSelectedNotes() {
     final selectedIds = ref.read(selectedNotesProvider).toList();
     showDialog(
@@ -2317,10 +2406,9 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           TextButton(onPressed: () {
-            ref.read(notesProvider.notifier).deleteNotes(selectedIds);
             ref.read(selectedNotesProvider.notifier).clear();
             Navigator.pop(context);
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${selectedIds.length} notes moved to Recycle Bin')));
+            deleteNotesWithUndo(this.context, ref, selectedIds);
           }, child: const Text('Delete', style: TextStyle(color: Colors.red))),
         ],
       ),
@@ -2377,10 +2465,10 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           TextButton(onPressed: () {
-            ref.read(remindersProvider.notifier).deleteReminders(selectedIds);
+            final removed = ref.read(remindersProvider).where((r) => selectedIds.contains(r.id)).toList();
             ref.read(selectedRemindersProvider.notifier).clear();
             Navigator.pop(context);
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${selectedIds.length} reminders permanently deleted')));
+            deleteRemindersWithUndo(this.context, ref, removed);
           }, child: const Text('Delete', style: TextStyle(color: Colors.red))),
         ],
       ),
@@ -2393,14 +2481,14 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Bills?'),
-        content: Text('Move ${selectedIds.length} bills to Recycle Bin?'),
+        content: Text('Permanently delete ${selectedIds.length} bills and their reminders?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           TextButton(onPressed: () {
-            ref.read(billsProvider.notifier).deleteBills(selectedIds);
+            final removed = ref.read(billsProvider).where((b) => selectedIds.contains(b.id)).toList();
             ref.read(selectedBillsProvider.notifier).clear();
             Navigator.pop(context);
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${selectedIds.length} bills moved to Recycle Bin')));
+            deleteBillsWithUndo(this.context, ref, removed);
           }, child: const Text('Delete', style: TextStyle(color: Colors.red))),
         ],
       ),
@@ -2497,8 +2585,13 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
         ref.read(expensesProvider),
         ref.read(linkItemsProvider),
         ref.read(tablesProvider),
-        ref.read(cardsProvider),
-        ref.read(lockProvider),
+      );
+      // Fuel + service history go to mileage_backup/ (was never called before).
+      await ref.read(fuelEntriesProvider.notifier).ready;
+      await ref.read(vaultServiceProvider).exportMileageToFolders(
+        vaultPath,
+        ref.read(fuelEntriesProvider),
+        ref.read(serviceEntriesProvider),
       );
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt('last_sync_timestamp_ms', DateTime.now().millisecondsSinceEpoch);
@@ -2525,7 +2618,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt('last_sync_timestamp_ms', DateTime.now().millisecondsSinceEpoch);
       ref.invalidate(vaultPathProvider);
-      ref.invalidate(cardsProvider);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Vault connected to: $selectedDirectory')));
     } else {
       // User cancelled — remind them a folder is required
@@ -2578,7 +2670,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
 
           // Register items
           for (final note in importedNotes) {
-            ref.read(notesProvider.notifier).addNote(note);
+            ref.read(notesProvider.notifier).addNote(note, dedupe: true);
           }
           if (importedExpenses.isNotEmpty) ref.read(expensesProvider.notifier).addExpenses(importedExpenses);
           if (importedLinks.isNotEmpty) {

@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import '../models.dart';
 import '../providers.dart';
+import '../utils/undo_helpers.dart';
 import '../profiles/providers/theme_provider.dart';
 import '../widgets/empty_state.dart';
 
@@ -19,7 +20,7 @@ class _RemindersViewState extends ConsumerState<RemindersView> {
   Widget build(BuildContext context) {
     final reminders = ref.watch(remindersProvider);
     final selectedReminders = ref.watch(selectedRemindersProvider);
-    final isSelectionMode = selectedReminders.isNotEmpty;
+    final isSelectionMode = selectedReminders.isNotEmpty || ref.watch(isSelectionModeProvider);
     final isDark = ref.watch(themeModeProvider) == ThemeMode.dark;
 
     final now = DateTime.now();
@@ -314,40 +315,58 @@ class _RemindersViewState extends ConsumerState<RemindersView> {
                       ),
                       const SizedBox(height: 4),
                     ],
-                    IconButton(
-                      icon: const Icon(Icons.edit_outlined, size: 20),
-                      onPressed: () => _showAddEditReminderDialog(context, reminder: reminder),
-                      color: isDark ? Colors.white70 : Colors.black54,
+                    PopupMenuButton<String>(
+                      icon: Icon(Icons.more_vert, size: 20, color: isDark ? Colors.white70 : Colors.black54),
+                      padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
-                      padding: const EdgeInsets.all(4.0),
-                    ),
-                    const SizedBox(height: 4),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 20, color: Colors.redAccent),
-                      onPressed: () {
-                        showDialog(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Delete Reminder?'),
-                            content: const Text('Are you sure you want to permanently delete this reminder?'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('Cancel'),
-                              ),
-                              TextButton(
-                                onPressed: () {
-                                  ref.read(remindersProvider.notifier).deleteReminder(reminder.id);
-                                  Navigator.pop(context);
-                                },
-                                child: const Text('Delete', style: TextStyle(color: Colors.red)),
-                              ),
+                      onSelected: (value) {
+                        if (value == 'edit') {
+                          _showAddEditReminderDialog(context, reminder: reminder);
+                        } else if (value == 'delete') {
+                          showDialog(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Delete Reminder?'),
+                              content: const Text('Are you sure you want to permanently delete this reminder?'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: const Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                    deleteRemindersWithUndo(this.context, ref, [reminder]);
+                                  },
+                                  child: const Text('Delete', style: TextStyle(color: Colors.red)),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'edit',
+                          child: Row(
+                            children: [
+                              Icon(Icons.edit_outlined, size: 20),
+                              SizedBox(width: 8),
+                              Text('Edit'),
                             ],
                           ),
-                        );
-                      },
-                      constraints: const BoxConstraints(),
-                      padding: const EdgeInsets.all(4.0),
+                        ),
+                        const PopupMenuItem(
+                          value: 'delete',
+                          child: Row(
+                            children: [
+                              Icon(Icons.delete_outline, size: 20, color: Colors.redAccent),
+                              SizedBox(width: 8),
+                              Text('Delete', style: TextStyle(color: Colors.redAccent)),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -409,10 +428,13 @@ class _RemindersViewState extends ConsumerState<RemindersView> {
       title: Text(label),
       onTap: () {
         Navigator.pop(sheetCtx);
+        // Snooze moves only this occurrence: keep the series' original
+        // date/time as its anchor so a repeating reminder doesn't drift.
         ref.read(remindersProvider.notifier).updateReminder(
           reminder.copyWith(
             dateTime: DateTime.now().add(duration),
             isDismissed: false,
+            referenceDate: reminder.referenceDate ?? reminder.dateTime,
           ),
         );
       },
@@ -637,6 +659,12 @@ class _ReminderDialogState extends ConsumerState<ReminderDialog> {
         FilledButton(
           onPressed: () {
             if (_formKey.currentState?.validate() == true) {
+              if (_repeatType == 'none' && !_selectedDateTime.isAfter(DateTime.now())) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Pick a time in the future for a one-time reminder')),
+                );
+                return;
+              }
               final newReminder = Reminder(
                 id: widget.reminder?.id,
                 title: _titleController.text.trim(),
@@ -645,7 +673,8 @@ class _ReminderDialogState extends ConsumerState<ReminderDialog> {
                 isDismissed: false,
                 createdAt: widget.reminder?.createdAt,
                 repeatType: _repeatType,
-                referenceDate: widget.reminder?.referenceDate ?? _selectedDateTime,
+                // The chosen date/time is the start of the (new) schedule.
+                referenceDate: _selectedDateTime,
               );
               if (isEdit) {
                 ref.read(remindersProvider.notifier).updateReminder(newReminder);

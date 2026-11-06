@@ -1719,6 +1719,14 @@ class SyncNotifier extends Notifier<SyncStatus> {
   @override
   SyncStatus build() => SyncStatus.idle;
 
+  /// First line of an error, without the "Exception: " prefix, kept short so
+  /// it fits in the snackbar but still says what went wrong.
+  static String _shortError(Object e) {
+    var text = e.toString().split('\n').first.replaceFirst(RegExp(r'^(Exception|HiveError|PlatformException):\s*'), '');
+    if (text.length > 80) text = '${text.substring(0, 80)}…';
+    return text;
+  }
+
   void _finish(List<String> failed, String successMessage) {
     if (failed.isEmpty) {
       lastMessage = successMessage;
@@ -1771,7 +1779,7 @@ class SyncNotifier extends Notifier<SyncStatus> {
           }
         } catch (e) {
           print('Backup error for $fileName: $e');
-          failed.add(fileName);
+          failed.add('$fileName (${_shortError(e)})');
         }
       }
 
@@ -1818,7 +1826,7 @@ class SyncNotifier extends Notifier<SyncStatus> {
           }
         } catch (e) {
           print('Restore error for $fileName: $e');
-          failed.add(fileName);
+          failed.add('$fileName (${_shortError(e)})');
           if (await tempFile.exists()) await tempFile.delete();
         }
       }
@@ -1830,7 +1838,7 @@ class SyncNotifier extends Notifier<SyncStatus> {
       } catch (e) {
         // "No backups found" is not fatal: the rest of the vault is restored.
         print('Docs restore: $e');
-        if (!e.toString().contains('No backups found')) failed.add('Docs');
+        if (!e.toString().contains('No backups found')) failed.add('Docs (${_shortError(e)})');
       }
 
       // The files were replaced behind VaultService's back: drop its cache,

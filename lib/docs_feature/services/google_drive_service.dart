@@ -7,6 +7,7 @@ import 'package:archive/archive_io.dart';
 import 'package:hive/hive.dart';
 import 'package:path/path.dart' as p;
 import 'local_storage_service.dart';
+import '../models/document_model.dart';
 
 class GoogleDriveService {
   final GoogleSignIn _googleSignIn = GoogleSignIn(
@@ -54,8 +55,12 @@ class GoogleDriveService {
     // ('documentsboxv3.hive'), so the real path is taken from the open box
     // instead of being guessed -- the old hard-coded 'documentsBoxV3.hive'
     // never existed, which meant document records were never backed up.
-    final box = Hive.box(LocalStorageService.boxName);
-    await box.flush();
+    // The box is opened as Box<DocumentModel>; asking Hive for an untyped
+    // Hive.box(...) throws "already open and of type Box<DocumentModel>",
+    // which made every Docs backup fail.
+    if (Hive.isBoxOpen(LocalStorageService.boxName)) {
+      await Hive.box<DocumentModel>(LocalStorageService.boxName).flush();
+    }
     final hivePath = LocalStorageService.boxFilePath ?? '${appDir.path}/${LocalStorageService.boxName.toLowerCase()}.hive';
     final hiveFile = File(hivePath);
     if (await hiveFile.exists()) {

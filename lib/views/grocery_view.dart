@@ -8,6 +8,8 @@ import '../providers.dart';
 import '../utils/grocery_catalog.dart';
 import '../utils/undo_helpers.dart';
 
+const _infoBlue = Color(0xFF3B6FD8);
+const _removeRed = Color(0xFFD9534F);
 const _green = Color(0xFF16A34A);
 
 /// Shopping list: one list grouped by category, quick add with catalog
@@ -73,9 +75,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
     final already = ref.read(groceryProvider).any((i) => !i.isPurchased && i.name.toLowerCase() == name.toLowerCase());
     if (already) {
       _input.clear();
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text('$name is already on your list'), duration: const Duration(seconds: 2)));
+      showGroceryToast(context, '$name is already on your list', icon: Icons.info, color: _infoBlue);
       return;
     }
     final answer = await askGroceryQuantity(
@@ -83,6 +83,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       name,
       initialQuantity: _typedQuantity(),
       localName: localName,
+      category: category,
       offerSave: offerSave,
     );
     if (answer == null || !mounted) return;
@@ -98,7 +99,6 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
     String category = '',
     String localName = '',
   }) async {
-    final messenger = ScaffoldMessenger.of(context);
     final result = await ref.read(groceryProvider.notifier).addItem(
           name,
           quantity: quantity,
@@ -107,6 +107,9 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
         );
     if (!mounted) return;
     HapticFeedback.selectionClick();
+    if (result == GroceryAddResult.added) {
+      showGroceryAddedToast(context, quantity.isEmpty ? name : '$name · $quantity');
+    }
     _input.clear();
     _focus.requestFocus(); // keep the keyboard up for the next item
     final message = switch (result) {
@@ -115,20 +118,25 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       GroceryAddResult.movedBack => '$name moved back to your list',
       GroceryAddResult.ignored => null,
     };
-    if (message != null) {
-      messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(SnackBar(content: Text(message), duration: const Duration(seconds: 2)));
-    }
+    if (message != null) showGroceryToast(context, message, icon: Icons.info, color: _infoBlue);
   }
 
   static String _capitalise(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
+  /// Opens Browse products; leaves selection mode first so the list is
+  /// back to normal on return.
+  void _openBrowse({bool manage = false}) {
+    ref.read(selectedGroceryProvider.notifier).clear();
+    ref.read(isSelectionModeProvider.notifier).setState(false);
+    Navigator.push(context, MaterialPageRoute(builder: (_) => GroceryMasterListView(manage: manage)));
+  }
 
   // ── List actions ──────────────────────────────────────────────────────────
 
   void _share(List<GroceryItem> items) {
     final toBuy = items.where((i) => !i.isPurchased).toList();
     if (toBuy.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nothing to buy — the list is empty')));
+      showGroceryToast(context, 'Nothing to buy — the list is empty', icon: Icons.info, color: _infoBlue);
       return;
     }
     final buffer = StringBuffer('🛒 Shopping list (${toBuy.length})\n');
@@ -172,7 +180,10 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
         break;
       case 'shopAgain':
         _confirm('Shop again?', 'Move every bought item back to the list?',
-            () => ref.read(groceryProvider.notifier).uncheckAll());
+            () async {
+          await ref.read(groceryProvider.notifier).uncheckAll();
+          if (mounted) showGroceryToast(context, 'All items back on the list', icon: Icons.replay, color: _infoBlue);
+        });
         break;
       case 'clearBought':
         _clearBought(items);
@@ -186,7 +197,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
         );
         break;
       case 'catalog':
-        Navigator.push(context, MaterialPageRoute(builder: (_) => const GroceryMasterListView()));
+        _openBrowse(manage: true);
         break;
     }
   }
@@ -271,34 +282,59 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
   Widget _buildInput() {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-      child: TextField(
-        controller: _input,
-        focusNode: _focus,
-        textCapitalization: TextCapitalization.sentences,
-        textInputAction: TextInputAction.done,
-        onSubmitted: (_) => _addTyped(),
-        decoration: InputDecoration(
-          hintText: 'Add item — e.g. tomato 1 kg',
-          prefixIcon: const Icon(Icons.add_shopping_cart),
-          suffixIcon: _input.text.isEmpty
-              ? null
-              : Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(icon: const Icon(Icons.close), tooltip: 'Clear', onPressed: _input.clear),
-                    IconButton(
-                      icon: const Icon(Icons.check_circle, color: _green),
-                      tooltip: 'Add',
-                      onPressed: _addTyped,
-                    ),
-                  ],
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: SizedBox(
+              height: 42,
+              child: TextField(
+                controller: _input,
+                focusNode: _focus,
+                textCapitalization: TextCapitalization.sentences,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _addTyped(),
+                style: const TextStyle(fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: 'Search or add item',
+                  prefixIcon: const Icon(Icons.search, size: 20),
+                  suffixIcon: _input.text.isEmpty
+                      ? null
+                      : Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.check_circle, color: _green, size: 22),
+                              tooltip: 'Add',
+                              visualDensity: VisualDensity.compact,
+                              onPressed: _addTyped,
+                            ),
+                            IconButton(icon: const Icon(Icons.close, size: 20), tooltip: 'Clear', visualDensity: VisualDensity.compact, onPressed: _input.clear),
+                          ],
+                        ),
+                  filled: true,
+                  fillColor: scheme.onSurface.withValues(alpha: 0.05),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
                 ),
-          filled: true,
-          fillColor: scheme.onSurface.withValues(alpha: 0.05),
-          contentPadding: const EdgeInsets.symmetric(vertical: 12),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
-        ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            height: 42,
+            child: FilledButton.tonalIcon(
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+              ),
+              icon: const Icon(Icons.storefront_rounded, size: 20),
+              label: const Text('Browse products', style: TextStyle(fontSize: 12)),
+              onPressed: () => _openBrowse(),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -332,7 +368,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
             existing: onList[m.name.toLowerCase()],
             quantityHint: typedLabel.isNotEmpty ? typedLabel : null,
             onTap: () => _addCatalog(m),
-            onRemove: (id) => deleteGroceryWithUndo(context, ref, {id}),
+            onRemove: (id) => ref.read(groceryProvider.notifier).deleteMultiple({id}),
           ),
         if (matches.isEmpty && catalog.isEmpty)
           const Padding(
@@ -369,7 +405,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
             child: OutlinedButton.icon(
               icon: const Icon(Icons.menu_book_outlined),
               label: const Text('Browse catalog'),
-              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GroceryMasterListView())),
+              onPressed: () => _openBrowse(),
             ),
           ),
         ],
@@ -387,6 +423,9 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
             } else {
               HapticFeedback.lightImpact();
               ref.read(groceryProvider.notifier).toggleItem(item.id);
+              item.isPurchased
+                  ? showGroceryToast(context, '${item.name} back on the list', icon: Icons.undo, color: _infoBlue)
+                  : showGroceryToast(context, '${item.name} bought');
             }
           },
           onLongPress: () {
@@ -481,57 +520,76 @@ class _GroceryRow extends StatelessWidget {
     final done = item.isPurchased;
     final muted = scheme.onSurface.withValues(alpha: 0.45);
 
-    final tile = Material(
-      color: selected ? scheme.primary.withValues(alpha: 0.10) : Colors.transparent,
+    final border = done ? _green.withValues(alpha: 0.55) : scheme.outlineVariant.withValues(alpha: 0.6);
+    final radius = BorderRadius.circular(12);
+
+    final card = Material(
+      color: selected
+          ? scheme.primary.withValues(alpha: 0.12)
+          : done
+              ? _green.withValues(alpha: 0.08)
+              : scheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(borderRadius: radius, side: BorderSide(color: selected ? scheme.primary : border)),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onToggle,
         onLongPress: onLongPress,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+          padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
           child: Row(
             children: [
-              if (selecting)
-                Checkbox(value: selected, onChanged: (_) => onToggle())
-              else
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  width: 26,
-                  height: 26,
-                  margin: const EdgeInsets.symmetric(horizontal: 6),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: done ? _green : Colors.transparent,
-                    border: Border.all(color: done ? _green : muted, width: 2),
-                  ),
-                  child: done ? const Icon(Icons.check, size: 16, color: Colors.white) : null,
+              if (selecting) Checkbox(value: selected, onChanged: (_) => onToggle()),
+              // Item picture with a thin divider after it.
+              SizedBox(
+                width: 34,
+                child: Text(
+                  groceryEmoji(item.name, item.category),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 22, color: Colors.black.withValues(alpha: done ? 0.55 : 1)),
                 ),
-              const SizedBox(width: 8),
+              ),
+              Container(
+                width: 1,
+                height: 28,
+                margin: const EdgeInsets.symmetric(horizontal: 10),
+                color: scheme.outlineVariant.withValues(alpha: 0.7),
+              ),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       item.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 15,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w700,
                         decoration: done ? TextDecoration.lineThrough : null,
                         color: done ? muted : null,
                       ),
                     ),
                     if (item.localName.isNotEmpty)
-                      Text(item.localName, style: TextStyle(fontSize: 11, color: muted), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(item.localName, style: TextStyle(fontSize: 11, color: muted), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
                   ],
                 ),
               ),
-              if (!selecting)
+              if (!selecting) ...[
+                const SizedBox(width: 8),
                 InkWell(
                   borderRadius: BorderRadius.circular(16),
                   onTap: onEdit,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
-                      color: item.quantityLabel.isEmpty ? Colors.transparent : scheme.primary.withValues(alpha: done ? 0.05 : 0.12),
+                      color: item.quantityLabel.isEmpty
+                          ? Colors.transparent
+                          : done
+                              ? scheme.onSurface.withValues(alpha: 0.08)
+                              : scheme.primary.withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(16),
                       border: item.quantityLabel.isEmpty ? Border.all(color: muted.withValues(alpha: 0.4)) : null,
                     ),
@@ -540,29 +598,47 @@ class _GroceryRow extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
-                        color: item.quantityLabel.isEmpty ? muted : (done ? muted : scheme.primary),
+                        color: item.quantityLabel.isEmpty ? muted : (done ? scheme.onSurface.withValues(alpha: 0.8) : scheme.primary),
                       ),
                     ),
                   ),
                 ),
+                const SizedBox(width: 10),
+                // Tick on the right: outlined grey while to buy, filled green once bought.
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  width: 24,
+                  height: 24,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: done ? _green : Colors.transparent,
+                    border: Border.all(color: done ? _green : muted, width: 1.6),
+                  ),
+                  child: Icon(Icons.check, size: 15, color: done ? Colors.white : muted),
+                ),
+              ],
             ],
           ),
         ),
       ),
     );
 
-    if (selecting) return tile;
-    return Dismissible(
-      key: ValueKey('dismiss_${item.id}'),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        color: Colors.red,
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 24),
-        child: const Icon(Icons.delete_outline, color: Colors.white),
+    const gap = EdgeInsets.symmetric(horizontal: 12, vertical: 3);
+    if (selecting) return Padding(padding: gap, child: card);
+    return Padding(
+      padding: gap,
+      child: Dismissible(
+        key: ValueKey('dismiss_${item.id}'),
+        direction: DismissDirection.endToStart,
+        background: Container(
+          decoration: BoxDecoration(color: Colors.red, borderRadius: radius),
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.only(right: 24),
+          child: const Icon(Icons.delete_outline, color: Colors.white),
+        ),
+        onDismissed: (_) => onDelete(),
+        child: card,
       ),
-      onDismissed: (_) => onDelete(),
-      child: tile,
     );
   }
 }
@@ -573,6 +649,7 @@ class _SuggestionTile extends StatelessWidget {
   final String? quantityHint;
   final VoidCallback onTap;
   final void Function(String id) onRemove;
+  final void Function(String action)? onMenu; // 'edit' / 'delete' (Browse products only)
 
   const _SuggestionTile({
     required this.item,
@@ -580,37 +657,75 @@ class _SuggestionTile extends StatelessWidget {
     required this.onTap,
     required this.onRemove,
     this.quantityHint,
+    this.onMenu,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final onListToBuy = existing != null && !existing!.isPurchased;
+    final menu = onMenu == null
+        ? null
+        : PopupMenuButton<String>(
+            tooltip: 'More',
+            padding: EdgeInsets.zero,
+            icon: Icon(Icons.more_vert, size: 20, color: scheme.onSurface.withValues(alpha: 0.6)),
+            onSelected: onMenu,
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Edit'), contentPadding: EdgeInsets.zero)),
+              PopupMenuItem(
+                value: 'delete',
+                child: ListTile(leading: Icon(Icons.delete_outline, color: Colors.red), title: Text('Delete'), contentPadding: EdgeInsets.zero),
+              ),
+            ],
+          );
     return ListTile(
       dense: true,
-      title: Text(item.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-      subtitle: Text(
-        [if (item.localName.isNotEmpty) item.localName, item.category].join('  ·  '),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+      visualDensity: const VisualDensity(vertical: -3),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+      minLeadingWidth: 30,
+      leading: Text(groceryEmoji(item.name, item.category), style: const TextStyle(fontSize: 22)),
+      title: Text(item.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+      subtitle: item.localName.isEmpty
+          ? null
+          : Text(item.localName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11)),
       trailing: onListToBuy
           ? Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Icon(Icons.check_circle, color: _green, size: 20),
-                const SizedBox(width: 4),
-                Text(
-                  existing!.quantityLabel.isNotEmpty ? 'Added · ${existing!.quantityLabel}' : 'Added',
-                  style: const TextStyle(color: _green, fontSize: 12, fontWeight: FontWeight.w700),
-                ),
+                if (existing!.quantityLabel.isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    existing!.quantityLabel,
+                    style: const TextStyle(color: _green, fontSize: 13, fontWeight: FontWeight.w700),
+                  ),
+                ],
                 IconButton(
                   tooltip: 'Remove from list',
                   visualDensity: VisualDensity.compact,
                   iconSize: 18,
                   icon: Icon(Icons.close, color: scheme.onSurface.withValues(alpha: 0.6)),
-                  onPressed: () => onRemove(existing!.id),
+                  onPressed: () async {
+                    final ok = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Remove item?'),
+                        content: Text('Remove ${item.name} from your list?'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('No')),
+                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Yes')),
+                        ],
+                      ),
+                    );
+                    if (ok != true) return;
+                    onRemove(existing!.id);
+                    if (context.mounted) {
+                      showGroceryToast(context, '${item.name} removed', icon: Icons.remove_circle, color: _removeRed);
+                    }
+                  },
                 ),
+                ?menu,
               ],
             )
           : Row(
@@ -622,6 +737,7 @@ class _SuggestionTile extends StatelessWidget {
                     child: Text(quantityHint!, style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700)),
                   ),
                 Icon(existing != null ? Icons.replay : Icons.add_circle, color: _green),
+                ?menu,
               ],
             ),
       onTap: onListToBuy ? null : onTap,
@@ -640,6 +756,7 @@ Future<({String quantity, bool saveToCatalog})?> askGroceryQuantity(
   String name, {
   String initialQuantity = '',
   String localName = '',
+  String category = '',
   bool offerSave = false,
 }) {
   final controller = TextEditingController(text: initialQuantity);
@@ -678,6 +795,7 @@ Future<({String quantity, bool saveToCatalog})?> askGroceryQuantity(
                   border: OutlineInputBorder(),
                 ),
               ),
+              QuantitySuggestionChips(controller: controller, category: category),
               if (offerSave) ...[
                 const SizedBox(height: 8),
                 CheckboxListTile(
@@ -740,7 +858,9 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
           quantity: _qty.text.trim(),
           unit: '',
         ));
-    if (mounted) Navigator.pop(context);
+    if (!mounted) return;
+    showGroceryToast(context, '$name updated', icon: Icons.edit, color: _infoBlue);
+    Navigator.pop(context);
   }
 
   @override
@@ -774,6 +894,7 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
               border: OutlineInputBorder(),
             ),
           ),
+          QuantitySuggestionChips(controller: _qty, category: widget.item.category),
           const SizedBox(height: 16),
           Row(
             children: [
@@ -799,7 +920,9 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
 // ── Catalog browser ─────────────────────────────────────────────────────────
 
 class GroceryMasterListView extends ConsumerStatefulWidget {
-  const GroceryMasterListView({super.key});
+  /// [manage] (opened from the ⋮ menu) adds Edit / Delete on each product and Reset.
+  final bool manage;
+  const GroceryMasterListView({super.key, this.manage = false});
 
   @override
   ConsumerState<GroceryMasterListView> createState() => _GroceryMasterListViewState();
@@ -816,8 +939,7 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
   }
 
   Future<void> _add(CatalogItem item) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final answer = await askGroceryQuantity(context, item.name, localName: item.localName);
+    final answer = await askGroceryQuantity(context, item.name, localName: item.localName, category: item.category);
     if (answer == null) return;
     final result = await ref.read(groceryProvider.notifier).addItem(
           item.name,
@@ -826,30 +948,69 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
           localName: item.localName,
         );
     HapticFeedback.selectionClick();
-    // A green "Added" tick shows on the row, so only unusual cases need a message.
+    if (result == GroceryAddResult.added && mounted) {
+      showGroceryAddedToast(context, answer.quantity.isEmpty ? item.name : '${item.name} · ${answer.quantity}');
+    }
+    // Only unusual cases need a bottom message.
     final message = switch (result) {
       GroceryAddResult.added => null,
       GroceryAddResult.alreadyOnList => '${item.name} is already on your list',
       GroceryAddResult.movedBack => '${item.name} moved back to your list',
       GroceryAddResult.ignored => null,
     };
-    if (message == null) return;
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 2), content: Text(message)));
+    if (message == null || !mounted) return;
+    showGroceryToast(context, message, icon: Icons.info, color: _infoBlue);
   }
 
-  void _showAddItemDialog() {
-    final enController = TextEditingController(text: _searchController.text.trim());
-    final localController = TextEditingController();
+  void _showAddItemDialog() => _showItemDialog();
+
+  Future<bool> _yesNo(String title, String message) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('No')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Yes')),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
+  Future<void> _deleteProduct(CatalogItem item) async {
+    if (!await _yesNo('Delete product?', 'Remove ${item.name} from Browse products? Items already on your list stay.')) return;
+    await ref.read(groceryCatalogProvider.notifier).deleteItem(item.id);
+    if (mounted) showGroceryToast(context, '${item.name} deleted', icon: Icons.delete, color: _removeRed);
+  }
+
+  Future<void> _resetCatalog() async {
+    if (!await _yesNo(
+      'Reset products?',
+      'Go back to the original product list. Products you saved, edited or deleted will be undone. Your shopping list is not touched.',
+    )) {
+      return;
+    }
+    await ref.read(groceryCatalogProvider.notifier).resetCatalog();
+    if (mounted) showGroceryToast(context, 'Products reset to default', icon: Icons.restart_alt, color: _infoBlue);
+  }
+
+  /// Add a new product, or edit [edit].
+  void _showItemDialog({CatalogItem? edit}) {
+    final enController = TextEditingController(text: edit?.name ?? _searchController.text.trim());
+    final localController = TextEditingController(text: edit?.localName ?? '');
     final keywordsController = TextEditingController();
-    var category = _category ?? 'Other';
-    var unit = '';
+    var category = edit?.category ?? _category ?? 'Other';
+    if (!kGroceryCategoryOrder.contains(category)) category = 'Other';
+    var unit = edit?.defaultUnit ?? '';
+    if (!kGroceryUnits.contains(unit)) unit = '';
 
     showDialog(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setDialogState) => AlertDialog(
-          title: const Text('Add to catalog'),
+          title: Text(edit == null ? 'New product' : 'Edit product'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -882,6 +1043,20 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
               onPressed: () {
                 final name = enController.text.trim();
                 if (name.isEmpty) return;
+                if (edit != null) {
+                  ref.read(groceryCatalogProvider.notifier).editItem(
+                        edit.id,
+                        englishName: name,
+                        localName: localController.text.trim(),
+                        oldLocalName: edit.localName,
+                        searchKeywords: keywordsController.text.trim(),
+                        category: category,
+                        unit: unit,
+                      );
+                  Navigator.pop(dialogContext);
+                  showGroceryToast(context, '$name updated', icon: Icons.edit, color: _infoBlue);
+                  return;
+                }
                 ref.read(groceryCatalogProvider.notifier).addCustomItem(
                       name,
                       localController.text.trim(),
@@ -890,8 +1065,9 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
                       unit: unit,
                     );
                 Navigator.pop(dialogContext);
+                showGroceryToast(context, '$name saved to products', icon: Icons.bookmark_added);
               },
-              child: const Text('Add'),
+              child: Text(edit == null ? 'Add' : 'Save'),
             ),
           ],
         ),
@@ -918,7 +1094,24 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Grocery catalog'),
+        title: const Row(children: [Icon(Icons.storefront_rounded), SizedBox(width: 10), Text('Browse products')]),
+        actions: [
+          if (widget.manage)
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            onSelected: (v) {
+              if (v == 'new') _showItemDialog();
+              if (v == 'reset') _resetCatalog();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'new', child: ListTile(leading: Icon(Icons.add), title: Text('New product'), contentPadding: EdgeInsets.zero)),
+              PopupMenuItem(
+                value: 'reset',
+                child: ListTile(leading: Icon(Icons.restart_alt), title: Text('Reset to default'), contentPadding: EdgeInsets.zero),
+              ),
+            ],
+          ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(108),
           child: Column(
@@ -932,6 +1125,13 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
                     hintText: 'Search in English, తెలుగు or हिंदी…',
                     filled: true,
                     prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _searchController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.close),
+                            tooltip: 'Clear',
+                            onPressed: () => setState(_searchController.clear),
+                          ),
                     isDense: true,
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
                   ),
@@ -963,7 +1163,8 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
           ),
         ),
       ),
-      body: loading && catalog.isEmpty
+      // Stop the list above the phone's nav buttons.
+      body: SafeArea(top: false, child: loading && catalog.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : items.isEmpty
               ? Center(
@@ -981,6 +1182,8 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
                   ),
                 )
               : ListView.builder(
+                  // Keep the last rows above the phone's nav buttons and the New item button.
+                  padding: const EdgeInsets.only(bottom: 88),
                   itemCount: items.length,
                   itemBuilder: (context, index) {
                     final item = items[index];
@@ -990,7 +1193,8 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
                       item: item,
                       existing: existing,
                       onTap: () => _add(item),
-                      onRemove: (id) => deleteGroceryWithUndo(context, ref, {id}),
+                      onRemove: (id) => ref.read(groceryProvider.notifier).deleteMultiple({id}),
+                      onMenu: !widget.manage ? null : (action) => action == 'edit' ? _showItemDialog(edit: item) : _deleteProduct(item),
                     );
                     if (!showHeader) return tile;
                     return Column(
@@ -998,12 +1202,129 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
                       children: [_SectionHeader(title: item.category, count: catalog.where((i) => i.category == item.category).length), tile],
                     );
                   },
-                ),
+                )),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddItemDialog,
         icon: const Icon(Icons.add),
-        label: const Text('Custom item'),
+        label: const Text('New item'),
       ),
+    );
+  }
+}
+
+// ── "Added" toast ───────────────────────────────────────────────────────────
+
+OverlayEntry? _groceryToast;
+
+/// Short "✓ item added" pill that drops in at the top of the screen.
+void showGroceryAddedToast(BuildContext context, String label) =>
+    showGroceryToast(context, '$label added');
+
+/// Small coloured pill that drops in at the top of the screen and fades away
+/// by itself. Used as feedback for every Grocery action.
+void showGroceryToast(
+  BuildContext context,
+  String message, {
+  IconData icon = Icons.check_circle,
+  Color color = _green,
+}) {
+  final overlay = Overlay.maybeOf(context, rootOverlay: true);
+  if (overlay == null) return;
+  _groceryToast?.remove();
+  late final OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (ctx) => Positioned(
+      top: MediaQuery.viewPaddingOf(ctx).top + 12,
+      left: 24,
+      right: 24,
+      child: IgnorePointer(
+        child: Center(
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: 1),
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            builder: (_, t, child) => Opacity(
+              opacity: t,
+              child: Transform.translate(offset: Offset(0, -16 * (1 - t)), child: child),
+            ),
+            child: Material(
+              color: color,
+              elevation: 6,
+              borderRadius: BorderRadius.circular(24),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, color: Colors.white, size: 18),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        message,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  _groceryToast = entry;
+  overlay.insert(entry);
+  Future.delayed(const Duration(milliseconds: 1600), () {
+    if (_groceryToast == entry) _groceryToast = null;
+    if (entry.mounted) entry.remove();
+  });
+}
+
+// ── Quantity suggestion chips ───────────────────────────────────────────────
+
+/// Tappable quantity suggestions under a quantity box; they follow what is
+/// typed ("2" → 2 kg, 2 packets…). Tapping one fills the box.
+class QuantitySuggestionChips extends StatelessWidget {
+  final TextEditingController controller;
+  final String category;
+
+  const QuantitySuggestionChips({super.key, required this.controller, this.category = ''});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) {
+        final typed = value.text.trim();
+        final options = suggestQuantities(typed, category: category)
+            .where((o) => o.toLowerCase() != typed.toLowerCase())
+            .toList();
+        if (options.isEmpty) return const SizedBox(height: 4);
+        return Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final o in options)
+                ActionChip(
+                  label: Text(o, style: const TextStyle(fontSize: 13)),
+                  visualDensity: VisualDensity.compact,
+                  backgroundColor: scheme.primary.withValues(alpha: 0.10),
+                  side: BorderSide.none,
+                  onPressed: () => controller.value = TextEditingValue(
+                    text: o,
+                    selection: TextSelection.collapsed(offset: o.length),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

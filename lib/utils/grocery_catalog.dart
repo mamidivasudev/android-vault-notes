@@ -162,3 +162,160 @@ String stepQuantity(String quantity, num delta) {
   if (next <= 0) return '';
   return next == next.roundToDouble() ? next.toInt().toString() : next.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '');
 }
+
+/// Picture for a grocery row: a keyword match on the name first, then the
+/// category, then a basket.
+String groceryEmoji(String name, [String category = '']) {
+  final n = name.toLowerCase();
+  for (final e in _kNameEmoji.entries) {
+    for (final k in e.key.split('|')) {
+      if (n.contains(k)) return e.value;
+    }
+  }
+  return _kCategoryEmoji[category] ?? '🛒';
+}
+
+const Map<String, String> _kNameEmoji = {
+  'tomato': '🍅', 'potato': '🥔', 'onion': '🧅', 'garlic': '🧄', 'ginger': '🫚',
+  'carrot': '🥕', 'brinjal|eggplant': '🍆', 'chilli|chili': '🌶️', 'capsicum|bell pepper': '🫑',
+  'cucumber': '🥒', 'corn': '🌽', 'broccoli': '🥦', 'cabbage|lettuce|spinach|palak|leaf|leaves|coriander|mint|methi|greens': '🥬',
+  'beans|peas|drumstick|okra|bhindi|ladies finger': '🫛', 'mushroom': '🍄', 'sweet potato': '🍠',
+  'coconut': '🥥', 'mango': '🥭', 'banana': '🍌', 'apple': '🍎', 'grape': '🍇', 'orange|mosambi': '🍊',
+  'lemon|lime': '🍋', 'watermelon': '🍉', 'melon': '🍈', 'pineapple': '🍍', 'strawberr': '🍓',
+  'cherry': '🍒', 'peach': '🍑', 'pear': '🍐', 'kiwi': '🥝', 'avocado': '🥑', 'pomegranate|guava|papaya': '🍎',
+  'milk': '🥛', 'curd|yogurt|yoghurt|buttermilk': '🥛', 'cheese|paneer': '🧀', 'butter|ghee': '🧈', 'egg': '🥚',
+  'bread|bun|pav': '🍞', 'biscuit|cookie': '🍪', 'cake': '🍰', 'croissant': '🥐',
+  'rice|poha|rava|sooji|semolina': '🍚', 'atta|flour|maida|wheat|besan': '🌾', 'noodle|pasta|vermicelli': '🍜',
+  'dal|lentil|gram|chana|rajma|moong|urad|toor': '🫘', 'oil': '🫗', 'sugar|jaggery|gur': '🧂', 'honey': '🍯',
+  'salt': '🧂', 'turmeric|masala|pepper|jeera|cumin|mustard|spice|clove|cardamom|cinnamon': '🧂',
+  'almond|cashew|walnut|pista|raisin|nut|peanut|groundnut': '🥜', 'chocolate': '🍫', 'chips': '🍟', 'sweet|candy': '🍬',
+  'tea': '🍵', 'coffee': '☕', 'juice': '🧃', 'water': '💧', 'soft drink|cola|soda': '🥤',
+  'chicken': '🍗', 'mutton|meat': '🥩', 'fish|prawn': '🐟',
+  'soap|shampoo|detergent|washing': '🧼', 'toothpaste|toothbrush|brush': '🪥', 'tissue|toilet': '🧻',
+  'sponge|scrub': '🧽', 'broom|mop': '🧹', 'agarbatti|incense|camphor|diya|pooja': '🪔',
+};
+
+const Map<String, String> _kCategoryEmoji = {
+  'Vegetables': '🥬', 'Fruits': '🍎', 'Dairy': '🥛', 'Bakery & Breakfast': '🍞', 'Grains & Rice': '🍚',
+  'Pulses & Lentils': '🫘', 'Spices': '🧂', 'Oils & Sweeteners': '🫗', 'Dry Fruits & Nuts': '🥜',
+  'Condiments': '🫙', 'Snacks & Sweets': '🍪', 'Beverages': '🥤', 'Household': '🧽',
+  'Personal Care': '🧴', 'Pooja': '🪔', 'Other': '🛒',
+};
+
+// ── Quantity suggestions ────────────────────────────────────────────────────
+
+/// Every quantity unit the app suggests: (singular, plural).
+const List<(String, String)> kQuantityUnits = [
+  ('kg', 'kg'),
+  ('g', 'g'),
+  ('L', 'L'),
+  ('ml', 'ml'),
+  ('packet', 'packets'),
+  ('piece', 'pieces'),
+  ('dozen', 'dozen'),
+  ('bunch', 'bunches'),
+  ('bottle', 'bottles'),
+  ('box', 'boxes'),
+  ('pouch', 'pouches'),
+  ('can', 'cans'),
+  ('tin', 'tins'),
+  ('jar', 'jars'),
+  ('bag', 'bags'),
+  ('sachet', 'sachets'),
+  ('bar', 'bars'),
+  ('roll', 'rolls'),
+  ('tray', 'trays'),
+  ('strip', 'strips'),
+  ('loaf', 'loaves'),
+  ('cup', 'cups'),
+  ('tube', 'tubes'),
+  ('pair', 'pairs'),
+];
+
+/// Units that fit each category best, most common first.
+const Map<String, List<String>> _kCategoryUnits = {
+  'Vegetables': ['kg', 'g', 'piece', 'bunch', 'dozen', 'bag'],
+  'Fruits': ['kg', 'dozen', 'piece', 'g', 'box'],
+  'Dairy': ['L', 'ml', 'packet', 'g', 'kg', 'cup', 'tray', 'dozen'],
+  'Bakery & Breakfast': ['packet', 'loaf', 'piece', 'box', 'g', 'dozen'],
+  'Grains & Rice': ['kg', 'g', 'bag', 'packet'],
+  'Pulses & Lentils': ['kg', 'g', 'packet'],
+  'Spices': ['g', 'packet', 'kg', 'box', 'jar'],
+  'Oils & Sweeteners': ['L', 'ml', 'kg', 'bottle', 'packet', 'jar', 'can', 'tin'],
+  'Dry Fruits & Nuts': ['g', 'kg', 'packet', 'box'],
+  'Condiments': ['bottle', 'jar', 'packet', 'g', 'ml', 'sachet'],
+  'Snacks & Sweets': ['packet', 'box', 'g', 'kg', 'piece', 'bar'],
+  'Beverages': ['L', 'ml', 'bottle', 'packet', 'can', 'box', 'g'],
+  'Household': ['piece', 'packet', 'bottle', 'L', 'kg', 'roll', 'box'],
+  'Personal Care': ['piece', 'bottle', 'tube', 'packet', 'bar', 'ml', 'g'],
+  'Pooja': ['packet', 'box', 'piece', 'bunch', 'g'],
+};
+
+const List<String> _kDefaultUnitOrder = ['kg', 'g', 'packet', 'piece', 'L', 'ml', 'dozen', 'bottle', 'box', 'bunch'];
+
+/// Typical amounts offered for a unit when no number is typed yet.
+const Map<String, List<String>> _kUnitAmounts = {
+  'kg': ['1', '2', '½', '5'],
+  'g': ['100', '250', '500', '50'],
+  'L': ['1', '2', '½'],
+  'ml': ['200', '500', '100'],
+  'dozen': ['1', '½', '2'],
+};
+
+String _qtyUnitLabel(String number, (String, String) unit) {
+  final n = double.tryParse(number);
+  final single = number == '½' || number == '1' || (n != null && n <= 1);
+  return '$number ${single ? unit.$1 : unit.$2}';
+}
+
+/// Quantity suggestions for what was typed so far ("2" → 2 kg, 2 packets…;
+/// "pa" → 1 packet, 2 packets; "" → the usual amounts for [category]).
+List<String> suggestQuantities(String typed, {String category = '', int limit = 8}) {
+  final t = typed.trim().toLowerCase();
+  final order = <String>[
+    ...?_kCategoryUnits[category],
+    ..._kDefaultUnitOrder,
+    for (final u in kQuantityUnits) u.$1,
+  ];
+  final seenUnits = <String>{};
+  final units = <(String, String)>[];
+  for (final name in order) {
+    if (!seenUnits.add(name)) continue;
+    final u = kQuantityUnits.where((e) => e.$1 == name).firstOrNull;
+    if (u != null) units.add(u);
+  }
+
+  final out = <String>[];
+  void add(String s) {
+    if (out.length < limit && !out.any((o) => o.toLowerCase() == s.toLowerCase())) out.add(s);
+  }
+
+  final m = RegExp(r'^(\d+(?:[.,]\d+)?|½|1/2)\s*(.*)$').firstMatch(t);
+  if (m != null) {
+    final number = m.group(1)! == '1/2' ? '½' : m.group(1)!.replaceAll(',', '.');
+    final rest = m.group(2)!.trim();
+    for (final u in units) {
+      if (rest.isEmpty || u.$1.toLowerCase().startsWith(rest) || u.$2.toLowerCase().startsWith(rest)) {
+        add(_qtyUnitLabel(number, u));
+      }
+    }
+    return out;
+  }
+
+  // No number: match units (and "half …") by name, or show the usual ones.
+  final matching = t.isEmpty
+      ? units.take(4).toList()
+      : units.where((u) => u.$1.toLowerCase().startsWith(t) || u.$2.toLowerCase().startsWith(t)).toList();
+  if (t.isNotEmpty && 'half'.startsWith(t)) {
+    add('½ kg');
+    add('½ dozen');
+    add('½ L');
+  }
+  for (final u in matching) {
+    for (final amount in _kUnitAmounts[u.$1] ?? const ['1', '2']) {
+      add(_qtyUnitLabel(amount, u));
+      if (t.isEmpty && out.length >= (units.indexOf(u) + 1) * 2) break; // 2 per unit when empty
+    }
+  }
+  return out;
+}

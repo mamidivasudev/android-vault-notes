@@ -2417,24 +2417,24 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
     final existing = state.where((i) => _key(i.name) == _key(trimmed)).firstOrNull;
     if (existing != null) {
       if (!existing.isPurchased) return GroceryAddResult.alreadyOnList;
+      // Comes back to the top of the list, like a newly added item.
       state = [
+        existing.copyWith(
+          isPurchased: false,
+          purchasedAt: null,
+          quantity: quantity.isNotEmpty ? quantity : null,
+          unit: unit.isNotEmpty ? unit : null,
+        ),
         for (final i in state)
-          if (i.id == existing.id)
-            i.copyWith(
-              isPurchased: false,
-              purchasedAt: null,
-              quantity: quantity.isNotEmpty ? quantity : null,
-              unit: unit.isNotEmpty ? unit : null,
-            )
-          else
-            i
+          if (i.id != existing.id) i,
       ];
       await _saveItems();
       return GroceryAddResult.movedBack;
     }
+    // Newest first, so what was just added is at the top of the list.
     state = [
-      ...state,
       GroceryItem(name: trimmed, quantity: quantity, unit: unit, category: category, localName: localName),
+      ...state,
     ];
     await _saveItems();
     return GroceryAddResult.added;
@@ -2637,48 +2637,151 @@ final groceryBuyAgainProvider = Provider<List<GroceryHistoryEntry>>((ref) {
 });
 
 // Grocery Master Catalog Provider
+/// Bundled catalog + the user's changes on top of it:
+/// - `user_grocery_catalog`  items the user saved (ids start with "U")
+/// - `grocery_catalog_edits` built-in items the user edited (id → item json)
+/// - `grocery_catalog_hidden` built-in items the user deleted (ids)
+/// "Reset" clears all three, giving back the original catalog.
 class GroceryMasterCatalogNotifier extends AsyncNotifier<List<dynamic>> {
+  static const _userKey = 'user_grocery_catalog';
+  static const _editsKey = 'grocery_catalog_edits';
+  static const _hiddenKey = 'grocery_catalog_hidden';
+
+  List<dynamic> _base = const [];
+
   @override
   Future<List<dynamic>> build() async {
-    List<dynamic> baseItems = [];
-    try {
-      final String response = await rootBundle.loadString('assets/indian_grocery_master_v2_multilingual_search.json');
-      final data = json.decode(response);
-      baseItems = List<dynamic>.from(data['items']);
-    } catch (e) {
-      print('Error loading catalog: $e');
+    if (_base.isEmpty) {
+      try {
+        final String response = await rootBundle.loadString('assets/indian_grocery_master_v2_multilingual_search.json');
+        _base = List<dynamic>.from(json.decode(response)['items']);
+      } catch (e) {
+        print('Error loading catalog: $e');
+      }
     }
-
     final prefs = await SharedPreferences.getInstance();
-    final userItemsStr = prefs.getString('user_grocery_catalog');
-    if (userItemsStr != null) {
-      List<dynamic> decoded = json.decode(userItemsStr);
-      baseItems.addAll(decoded);
-    }
-    return baseItems;
+    final hidden = _readList(prefs, _hiddenKey).map((e) => e.toString()).toSet();
+    final edits = _readMap(prefs, _editsKey);
+    return [
+      for (final item in _base)
+        if (item is Map && !hidden.contains(item['id']?.toString())) edits[item['id']?.toString()] ?? item,
+      ..._readList(prefs, _userKey),
+    ];
   }
+
+  static List<dynamic> _readList(SharedPreferences prefs, String key) {
+    try {
+      final raw = prefs.getString(key);
+      if (raw != null) return List<dynamic>.from(json.decode(raw));
+    } catch (_) {}
+    return [];
+  }
+
+  static Map<String, dynamic> _readMap(SharedPreferences prefs, String key) {
+    try {
+      final raw = prefs.getString(key);
+      if (raw != null) return Map<String, dynamic>.from(json.decode(raw));
+    } catch (_) {}
+    return {};
+  }
+
+  static bool isUserItem(String id) => id.startsWith('U');
+
+  Future<void> _saved() async {
+    ref.invalidateSelf();
+    await ref.read(vaultServiceProvider).exportAppSettings();
+  }
+
+  static List<String> _keywords(String text) =>
+      text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
 
   Future<void> addCustomItem(String englishName, String localName, String searchKeywords,
       {String category = 'Other', String unit = ''}) async {
     final prefs = await SharedPreferences.getInstance();
-    final userItemsStr = prefs.getString('user_grocery_catalog');
-    List<dynamic> userItems = [];
-    if (userItemsStr != null) {
-      userItems = List<dynamic>.from(json.decode(userItemsStr));
-    }
-
-    final newItem = {
+    final userItems = _readList(prefs, _userKey);
+    userItems.add({
       "id": "U${DateTime.now().millisecondsSinceEpoch}",
-      "names": { "en": englishName, "local": localName },
-      "search_terms": { "en": searchKeywords.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList() },
+      "names": {"en": englishName, "local": localName},
+      "search_terms": {"en": _keywords(searchKeywords)},
       "category": category,
       if (unit.isNotEmpty) "default_unit": unit,
       if (unit.isNotEmpty) "common_units": [unit],
-    };
+    });
+    await prefs.setString(_userKey, json.encode(userItems));
+    await _saved();
+  }
 
-    userItems.add(newItem);
-    await prefs.setString('user_grocery_catalog', json.encode(userItems));
-    ref.invalidateSelf();
+  /// Changes a product's name, local name, extra search words, category or unit.
+  /// The local name is only replaced when it was changed, so built-in
+  /// Telugu/Hindi names stay as they are otherwise.
+  Future<void> editItem(
+    String id, {
+    required String englishName,
+    required String localName,
+    required String searchKeywords,
+    required String category,
+    required String unit,
+    required String oldLocalName,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final current = (state.value ?? const []).whereType<Map>().where((m) => m['id']?.toString() == id).firstOrNull;
+    if (current == null) return;
+    final item = Map<String, dynamic>.from(json.decode(json.encode(current)));
+    final names = Map<String, dynamic>.from((item['names'] as Map?) ?? {});
+    names['en'] = englishName;
+    if (localName != oldLocalName) {
+      names
+        ..remove('te')
+        ..remove('hi')
+        ..['local'] = localName;
+    }
+    item['names'] = names;
+    final terms = Map<String, dynamic>.from((item['search_terms'] as Map?) ?? {});
+    final extra = _keywords(searchKeywords);
+    if (extra.isNotEmpty) terms['user'] = extra; else terms.remove('user');
+    item['search_terms'] = terms;
+    item['category'] = category;
+    if (unit.isNotEmpty) {
+      item['default_unit'] = unit;
+      final units = List<dynamic>.from((item['common_units'] as List?) ?? []);
+      if (!units.contains(unit)) units.insert(0, unit);
+      item['common_units'] = units;
+    }
+
+    if (isUserItem(id)) {
+      final userItems = _readList(prefs, _userKey);
+      await prefs.setString(
+          _userKey, json.encode([for (final u in userItems) (u is Map && u['id']?.toString() == id) ? item : u]));
+    } else {
+      final edits = _readMap(prefs, _editsKey)..[id] = item;
+      await prefs.setString(_editsKey, json.encode(edits));
+    }
+    await _saved();
+  }
+
+  /// Removes a product from the catalog (saved items are deleted, built-in ones hidden).
+  Future<void> deleteItem(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (isUserItem(id)) {
+      final userItems = _readList(prefs, _userKey)..removeWhere((u) => u is Map && u['id']?.toString() == id);
+      await prefs.setString(_userKey, json.encode(userItems));
+    } else {
+      final hidden = _readList(prefs, _hiddenKey).map((e) => e.toString()).toSet()..add(id);
+      await prefs.setString(_hiddenKey, json.encode(hidden.toList()));
+      final edits = _readMap(prefs, _editsKey)..remove(id);
+      await prefs.setString(_editsKey, json.encode(edits));
+    }
+    await _saved();
+  }
+
+  /// Back to the original catalog: drops saved items, edits and deletions.
+  /// Written as empty values (not removed) so a sync to other devices resets them too.
+  Future<void> resetCatalog() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_userKey, '[]');
+    await prefs.setString(_editsKey, '{}');
+    await prefs.setString(_hiddenKey, '[]');
+    await _saved();
   }
 }
 

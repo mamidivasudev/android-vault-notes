@@ -50,6 +50,8 @@ class VaultService {
   static const List<String> _snapshotPrefKeys = [
     'grocery_items',
     'user_grocery_catalog',
+    'grocery_catalog_edits',
+    'grocery_catalog_hidden',
     'grocery_history',
     'expense_budgets',
     'custom_categories',

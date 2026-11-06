@@ -127,6 +127,10 @@ class _MileageViewState extends ConsumerState<MileageView> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text('Service entry deleted'),
+            // Snackbars with a button stay open forever by default; close after
+            // the duration and offer an X to close at once.
+            persist: false,
+            showCloseIcon: true,
             action: SnackBarAction(
               label: 'Undo',
               onPressed: () => ref.read(serviceEntriesProvider.notifier).restoreEntry(entry),
@@ -164,6 +168,10 @@ class _MileageViewState extends ConsumerState<MileageView> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text('Entry deleted'),
+            // Snackbars with a button stay open forever by default; close after
+            // the duration and offer an X to close at once.
+            persist: false,
+            showCloseIcon: true,
             action: SnackBarAction(
               label: 'Undo',
               onPressed: () {

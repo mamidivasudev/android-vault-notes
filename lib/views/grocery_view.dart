@@ -41,57 +41,74 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
 
   // ── Adding ────────────────────────────────────────────────────────────────
 
-  /// Adds typed text ("tomato 1 kg"), filling category/unit from the catalog.
+  /// Quantity the user already typed ("tomato 1 kg" → "1 kg").
+  String _typedQuantity() {
+    final parsed = parseGroceryInput(_input.text);
+    return [parsed.quantity, parsed.unit].where((p) => p.isNotEmpty).join(' ');
+  }
+
+  /// Adds the typed text. Items not found in the catalog can be saved to it.
   Future<void> _addTyped() async {
     final parsed = parseGroceryInput(_input.text);
     if (parsed.name.isEmpty) return;
     final match = findCatalogItem(ref.read(groceryCatalogItemsProvider), parsed.name);
-    await _add(
+    await _pickQuantityAndAdd(
       match?.name ?? _capitalise(parsed.name),
-      quantity: parsed.quantity,
-      unit: parsed.unit.isNotEmpty ? parsed.unit : (parsed.quantity.isNotEmpty ? (match?.defaultUnit ?? '') : ''),
       category: match?.category ?? '',
       localName: match?.localName ?? '',
+      offerSave: match == null,
     );
   }
 
-  Future<void> _addCatalog(CatalogItem item) async {
-    // Keep a quantity the user typed ("onion 2" → tap Onion).
-    final parsed = parseGroceryInput(_input.text);
-    await _add(
-      item.name,
-      quantity: parsed.quantity,
-      unit: parsed.unit.isNotEmpty ? parsed.unit : (parsed.quantity.isNotEmpty ? item.defaultUnit : ''),
-      category: item.category,
-      localName: item.localName,
-    );
-  }
+  Future<void> _addCatalog(CatalogItem item) =>
+      _pickQuantityAndAdd(item.name, category: item.category, localName: item.localName, offerSave: false);
 
-  Future<void> _addFromHistory(GroceryHistoryEntry h) =>
-      _add(h.name, quantity: h.quantity, unit: h.unit, category: h.category, localName: h.localName, clearInput: false);
+  /// Asks for a free-text quantity, then adds the item.
+  Future<void> _pickQuantityAndAdd(
+    String name, {
+    required String category,
+    required String localName,
+    required bool offerSave,
+  }) async {
+    final already = ref.read(groceryProvider).any((i) => !i.isPurchased && i.name.toLowerCase() == name.toLowerCase());
+    if (already) {
+      _input.clear();
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('$name is already on your list'), duration: const Duration(seconds: 2)));
+      return;
+    }
+    final answer = await askGroceryQuantity(
+      context,
+      name,
+      initialQuantity: _typedQuantity(),
+      localName: localName,
+      offerSave: offerSave,
+    );
+    if (answer == null || !mounted) return;
+    if (answer.saveToCatalog) {
+      await ref.read(groceryCatalogProvider.notifier).addCustomItem(name, '', '', category: 'Other');
+    }
+    await _add(name, quantity: answer.quantity, category: category, localName: localName);
+  }
 
   Future<void> _add(
     String name, {
     String quantity = '',
-    String unit = '',
     String category = '',
     String localName = '',
-    bool clearInput = true,
   }) async {
     final messenger = ScaffoldMessenger.of(context);
     final result = await ref.read(groceryProvider.notifier).addItem(
           name,
           quantity: quantity,
-          unit: unit,
           category: category,
           localName: localName,
         );
     if (!mounted) return;
     HapticFeedback.selectionClick();
-    if (clearInput) {
-      _input.clear();
-      _focus.requestFocus(); // keep the keyboard up for the next item
-    }
+    _input.clear();
+    _focus.requestFocus(); // keep the keyboard up for the next item
     final message = switch (result) {
       GroceryAddResult.added => null, // the item appearing is feedback enough
       GroceryAddResult.alreadyOnList => '$name is already on your list',
@@ -115,34 +132,37 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       return;
     }
     final buffer = StringBuffer('🛒 Shopping list (${toBuy.length})\n');
-    for (final group in _groupByCategory(toBuy)) {
-      buffer.writeln('\n${group.key}');
-      for (final i in group.value) {
-        buffer.writeln('☐ ${i.name}${i.quantityLabel.isNotEmpty ? ' — ${i.quantityLabel}' : ''}');
-      }
+    buffer.writeln();
+    for (final i in toBuy) {
+      buffer.writeln('☐ ${i.name}${i.quantityLabel.isNotEmpty ? ' — ${i.quantityLabel}' : ''}');
     }
     Share.share(buffer.toString().trim());
   }
 
-  Future<void> _confirm(String title, String message, String action, Future<void> Function() run) async {
+  /// Yes / No question; runs [run] only on Yes.
+  Future<void> _confirm(String title, String message, Future<void> Function() run) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(title),
         content: Text(message),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(action)),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('No')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Yes')),
         ],
       ),
     );
-    if (ok == true) await run();
+    if (ok == true && mounted) await run();
   }
 
   void _clearBought(List<GroceryItem> items) {
     final ids = items.where((i) => i.isPurchased).map((i) => i.id).toSet();
     if (ids.isEmpty) return;
-    deleteGroceryWithUndo(context, ref, ids);
+    _confirm(
+      'Clear bought items?',
+      'Remove ${ids.length} bought item${ids.length == 1 ? '' : 's'} from the list?',
+      () async => deleteGroceryWithUndo(context, ref, ids),
+    );
   }
 
   void _onMenu(String value, List<GroceryItem> items) {
@@ -151,7 +171,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
         _share(items);
         break;
       case 'shopAgain':
-        _confirm('Shop again?', 'Move every bought item back to the list.', 'Move back',
+        _confirm('Shop again?', 'Move every bought item back to the list?',
             () => ref.read(groceryProvider.notifier).uncheckAll());
         break;
       case 'clearBought':
@@ -159,7 +179,11 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
         break;
       case 'clearAll':
         if (items.isEmpty) return;
-        deleteGroceryWithUndo(context, ref, items.map((i) => i.id).toSet());
+        _confirm(
+          'Clear the whole list?',
+          'Remove all ${items.length} item${items.length == 1 ? '' : 's'}?',
+          () async => deleteGroceryWithUndo(context, ref, items.map((i) => i.id).toSet()),
+        );
         break;
       case 'catalog':
         Navigator.push(context, MaterialPageRoute(builder: (_) => const GroceryMasterListView()));
@@ -297,7 +321,9 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
           ListTile(
             leading: const CircleAvatar(backgroundColor: _green, child: Icon(Icons.add, color: Colors.white)),
             title: Text('Add "${_capitalise(parsed.name)}"', style: const TextStyle(fontWeight: FontWeight.w600)),
-            subtitle: typedLabel.isEmpty ? const Text('Not in the catalog — added as Other') : Text(typedLabel),
+            subtitle: Text(matches.isEmpty
+                ? 'Not found — you can save it to your items for next time'
+                : 'Add exactly what you typed'),
             onTap: _addTyped,
           ),
         for (final m in matches)
@@ -306,6 +332,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
             existing: onList[m.name.toLowerCase()],
             quantityHint: typedLabel.isNotEmpty ? typedLabel : null,
             onTap: () => _addCatalog(m),
+            onRemove: (id) => deleteGroceryWithUndo(context, ref, {id}),
           ),
         if (matches.isEmpty && catalog.isEmpty)
           const Padding(
@@ -319,7 +346,6 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
   // ── The list ──────────────────────────────────────────────────────────────
 
   Widget _buildList(List<GroceryItem> items, List<GroceryItem> toBuy, List<GroceryItem> bought) {
-    final buyAgain = ref.watch(groceryBuyAgainProvider);
     final selected = ref.watch(selectedGroceryProvider);
     final selecting = selected.isNotEmpty || ref.watch(isSelectionModeProvider);
 
@@ -327,7 +353,6 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       return ListView(
         padding: const EdgeInsets.only(bottom: 24),
         children: [
-          if (buyAgain.isNotEmpty) _buildBuyAgain(buyAgain),
           const SizedBox(height: 40),
           Icon(Icons.shopping_basket_outlined, size: 72, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.25)),
           const SizedBox(height: 12),
@@ -378,7 +403,6 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.only(bottom: 32),
       children: [
-        if (buyAgain.isNotEmpty && !selecting) _buildBuyAgain(buyAgain),
         if (toBuy.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 20),
@@ -386,10 +410,8 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
               child: Text('Everything is bought ✓', style: TextStyle(color: _green.withValues(alpha: 0.9), fontWeight: FontWeight.w600)),
             ),
           ),
-        for (final group in _groupByCategory(toBuy)) ...[
-          _SectionHeader(title: group.key, count: group.value.length),
-          for (final item in group.value) row(item),
-        ],
+        // One plain list in the order items were added (no category headings).
+        for (final item in toBuy) row(item),
         if (bought.isNotEmpty) ...[
           const SizedBox(height: 8),
           InkWell(
@@ -413,48 +435,6 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       ],
     );
   }
-
-  Widget _buildBuyAgain(List<GroceryHistoryEntry> entries) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 4, bottom: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 4, 16, 6),
-            child: Text('Buy again', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
-          ),
-          SizedBox(
-            height: 40,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              itemCount: entries.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (_, i) {
-                final h = entries[i];
-                return ActionChip(
-                  avatar: const Icon(Icons.add, size: 16),
-                  label: Text(h.name),
-                  onPressed: () => _addFromHistory(h),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Items grouped by category in shop order; items keep the order they were added.
-List<MapEntry<String, List<GroceryItem>>> _groupByCategory(List<GroceryItem> items) {
-  final map = <String, List<GroceryItem>>{};
-  for (final i in items) {
-    map.putIfAbsent(i.category.isEmpty ? 'Other' : i.category, () => []).add(i);
-  }
-  final entries = map.entries.toList()..sort((a, b) => groceryCategoryRank(a.key).compareTo(groceryCategoryRank(b.key)));
-  return entries;
 }
 
 class _SectionHeader extends StatelessWidget {
@@ -592,8 +572,15 @@ class _SuggestionTile extends StatelessWidget {
   final GroceryItem? existing;
   final String? quantityHint;
   final VoidCallback onTap;
+  final void Function(String id) onRemove;
 
-  const _SuggestionTile({required this.item, required this.existing, required this.onTap, this.quantityHint});
+  const _SuggestionTile({
+    required this.item,
+    required this.existing,
+    required this.onTap,
+    required this.onRemove,
+    this.quantityHint,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -608,7 +595,24 @@ class _SuggestionTile extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       ),
       trailing: onListToBuy
-          ? Text('On list', style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.5), fontWeight: FontWeight.w600))
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.check_circle, color: _green, size: 20),
+                const SizedBox(width: 4),
+                Text(
+                  existing!.quantityLabel.isNotEmpty ? 'Added · ${existing!.quantityLabel}' : 'Added',
+                  style: const TextStyle(color: _green, fontSize: 12, fontWeight: FontWeight.w700),
+                ),
+                IconButton(
+                  tooltip: 'Remove from list',
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 18,
+                  icon: Icon(Icons.close, color: scheme.onSurface.withValues(alpha: 0.6)),
+                  onPressed: () => onRemove(existing!.id),
+                ),
+              ],
+            )
           : Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -623,6 +627,78 @@ class _SuggestionTile extends StatelessWidget {
       onTap: onListToBuy ? null : onTap,
     );
   }
+}
+
+// ── Quantity dialog ─────────────────────────────────────────────────────────
+
+/// Small "how much?" box shown when an item is picked. The quantity is free
+/// text ("1 kg", "2 packets", "dozen"…) and optional. When [offerSave] is
+/// true (the item wasn't found in the catalog) it also asks whether to save
+/// the item for quicker search next time. Returns null if cancelled.
+Future<({String quantity, bool saveToCatalog})?> askGroceryQuantity(
+  BuildContext context,
+  String name, {
+  String initialQuantity = '',
+  String localName = '',
+  bool offerSave = false,
+}) {
+  final controller = TextEditingController(text: initialQuantity);
+  var save = true;
+  return showDialog<({String quantity, bool saveToCatalog})>(
+    context: context,
+    builder: (dialogContext) => StatefulBuilder(
+      builder: (dialogContext, setDialogState) {
+        void submit() => Navigator.pop(dialogContext, (quantity: controller.text.trim(), saveToCatalog: offerSave && save));
+        return AlertDialog(
+          title: Text(name),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Telugu · Hindi names, so the item is easy to recognise.
+              if (localName.isNotEmpty) ...[
+                Text(
+                  localName,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Theme.of(dialogContext).colorScheme.onSurface.withValues(alpha: 0.75),
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
+              TextField(
+                controller: controller,
+                autofocus: true,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => submit(),
+                decoration: const InputDecoration(
+                  labelText: 'Quantity (optional)',
+                  hintText: 'e.g. 1 kg, 2 packets, 1 dozen',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              if (offerSave) ...[
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  value: save,
+                  onChanged: (v) => setDialogState(() => save = v ?? false),
+                  title: const Text('Save to my items'),
+                  subtitle: const Text('Not found in the list — save it so it shows up when you search next time'),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+            FilledButton(onPressed: submit, child: const Text('Add')),
+          ],
+        );
+      },
+    ),
+  );
 }
 
 // ── Edit sheet ──────────────────────────────────────────────────────────────
@@ -646,9 +722,8 @@ class _GroceryEditSheet extends ConsumerStatefulWidget {
 
 class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
   late final TextEditingController _name = TextEditingController(text: widget.item.name);
-  late final TextEditingController _qty = TextEditingController(text: widget.item.quantity);
-  late String _unit = widget.item.unit;
-  late String _category = widget.item.category.isEmpty ? 'Other' : widget.item.category;
+  // Quantity is one free-text box ("1 kg", "2 packets"); old quantity + unit are joined.
+  late final TextEditingController _qty = TextEditingController(text: widget.item.quantityLabel);
 
   @override
   void dispose() {
@@ -657,120 +732,65 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
     super.dispose();
   }
 
-  void _step(num delta) {
-    // Sensible steps: 0.25 for kg/L, 50 for g/ml, 1 otherwise.
-    final step = (_unit == 'kg' || _unit == 'L')
-        ? 0.25
-        : (_unit == 'g' || _unit == 'ml')
-            ? 50
-            : 1;
-    setState(() => _qty.text = stepQuantity(_qty.text, delta * step));
-  }
-
   Future<void> _save() async {
     final name = _name.text.trim();
     if (name.isEmpty) return;
     await ref.read(groceryProvider.notifier).updateItem(widget.item.copyWith(
           name: name,
           quantity: _qty.text.trim(),
-          unit: _unit,
-          category: _category == 'Other' ? '' : _category,
+          unit: '',
         ));
     if (mounted) Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
-    final catalog = ref.watch(groceryCatalogItemsProvider);
-    final match = findCatalogItem(catalog, widget.item.name);
-    final units = <String>{...?match?.units, ...kGroceryUnits}.toList();
-    if (_unit.isNotEmpty && !units.contains(_unit)) units.insert(0, _unit);
     final scheme = Theme.of(context).colorScheme;
-
     return Padding(
       padding: EdgeInsets.only(left: 20, right: 20, bottom: MediaQuery.viewInsetsOf(context).bottom + 20),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              controller: _name,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(labelText: 'Item', border: OutlineInputBorder()),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _name,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(labelText: 'Item', border: OutlineInputBorder()),
+          ),
+          if (widget.item.localName.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6, left: 4),
+              child: Text(widget.item.localName, style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.6))),
             ),
-            if (widget.item.localName.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6, left: 4),
-                child: Text(widget.item.localName, style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.6))),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _qty,
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _save(),
+            decoration: const InputDecoration(
+              labelText: 'Quantity (optional)',
+              hintText: 'e.g. 1 kg, 2 packets, 1 dozen',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              TextButton.icon(
+                icon: const Icon(Icons.delete_outline, color: Colors.red),
+                label: const Text('Delete', style: TextStyle(color: Colors.red)),
+                onPressed: () {
+                  final navigator = Navigator.of(context);
+                  deleteGroceryWithUndo(context, ref, {widget.item.id});
+                  navigator.pop();
+                },
               ),
-            const SizedBox(height: 18),
-            const Text('Quantity', style: TextStyle(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                IconButton.filledTonal(onPressed: () => _step(-1), icon: const Icon(Icons.remove)),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 90,
-                  child: TextField(
-                    controller: _qty,
-                    textAlign: TextAlign.center,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(hintText: '—', border: OutlineInputBorder(), isDense: true),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton.filledTonal(onPressed: () => _step(1), icon: const Icon(Icons.add)),
-                const Spacer(),
-                if (_qty.text.isNotEmpty || _unit.isNotEmpty)
-                  TextButton(
-                    onPressed: () => setState(() {
-                      _qty.clear();
-                      _unit = '';
-                    }),
-                    child: const Text('No quantity'),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                for (final u in units)
-                  ChoiceChip(
-                    label: Text(u),
-                    selected: _unit == u,
-                    onSelected: (v) => setState(() => _unit = v ? u : ''),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            DropdownButtonFormField<String>(
-              initialValue: kGroceryCategoryOrder.contains(_category) ? _category : 'Other',
-              decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder()),
-              items: [for (final c in kGroceryCategoryOrder) DropdownMenuItem(value: c, child: Text(c))],
-              onChanged: (v) => setState(() => _category = v ?? 'Other'),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                TextButton.icon(
-                  icon: const Icon(Icons.delete_outline, color: Colors.red),
-                  label: const Text('Delete', style: TextStyle(color: Colors.red)),
-                  onPressed: () {
-                    final outer = Navigator.of(context);
-                    deleteGroceryWithUndo(context, ref, {widget.item.id});
-                    outer.pop();
-                  },
-                ),
-                const Spacer(),
-                FilledButton(onPressed: _save, child: const Text('Save')),
-              ],
-            ),
-          ],
-        ),
+              const Spacer(),
+              FilledButton(onPressed: _save, child: const Text('Save')),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -797,21 +817,25 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
 
   Future<void> _add(CatalogItem item) async {
     final messenger = ScaffoldMessenger.of(context);
+    final answer = await askGroceryQuantity(context, item.name, localName: item.localName);
+    if (answer == null) return;
     final result = await ref.read(groceryProvider.notifier).addItem(
           item.name,
+          quantity: answer.quantity,
           category: item.category,
           localName: item.localName,
         );
+    HapticFeedback.selectionClick();
+    // A green "Added" tick shows on the row, so only unusual cases need a message.
+    final message = switch (result) {
+      GroceryAddResult.added => null,
+      GroceryAddResult.alreadyOnList => '${item.name} is already on your list',
+      GroceryAddResult.movedBack => '${item.name} moved back to your list',
+      GroceryAddResult.ignored => null,
+    };
+    if (message == null) return;
     messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(SnackBar(
-      duration: const Duration(seconds: 1),
-      content: Text(switch (result) {
-        GroceryAddResult.added => '${item.name} added',
-        GroceryAddResult.alreadyOnList => '${item.name} is already on your list',
-        GroceryAddResult.movedBack => '${item.name} moved back to your list',
-        GroceryAddResult.ignored => '',
-      }),
-    ));
+    messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 2), content: Text(message)));
   }
 
   void _showAddItemDialog() {
@@ -962,7 +986,12 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
                     final item = items[index];
                     final existing = onList[item.name.toLowerCase()];
                     final showHeader = query.isEmpty && (index == 0 || items[index - 1].category != item.category);
-                    final tile = _SuggestionTile(item: item, existing: existing, onTap: () => _add(item));
+                    final tile = _SuggestionTile(
+                      item: item,
+                      existing: existing,
+                      onTap: () => _add(item),
+                      onRemove: (id) => deleteGroceryWithUndo(context, ref, {id}),
+                    );
                     if (!showHeader) return tile;
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,

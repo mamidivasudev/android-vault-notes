@@ -557,6 +557,10 @@ void deleteNotesWithUndo(BuildContext context, WidgetRef ref, List<String> ids) 
     SnackBar(
       content: Text(ids.length == 1 ? 'Note moved to Recycle Bin' : '${ids.length} notes moved to Recycle Bin'),
       duration: const Duration(seconds: 5),
+      // Snackbars with a button stay open forever by default; close after
+      // the duration and offer an X to close at once.
+      persist: false,
+      showCloseIcon: true,
       action: SnackBarAction(
         label: 'UNDO',
         onPressed: () async {

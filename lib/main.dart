@@ -178,6 +178,10 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
           ),
           backgroundColor: const Color(0xFFB45309),
           duration: const Duration(seconds: 6),
+          // Snackbars with a button stay open forever by default; close after
+          // the duration and offer an X to close at once.
+          persist: false,
+          showCloseIcon: true,
           action: SnackBarAction(
             label: 'Sync',
             textColor: Colors.white,

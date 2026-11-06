@@ -171,7 +171,6 @@ class _NotesViewState extends ConsumerState<NotesView> {
               isSelected: selectedNotes.contains(note.id),
               isSelectionMode: isSelectionMode,
               onTap: () => _openNote(note, isSelectionMode),
-              onCameraTap: isSelectionMode ? null : () => _openNote(note, false, ocr: true),
               onLongPress: () {
                 if (!isSelectionMode) {
                   ref.read(isSelectionModeProvider.notifier).setState(true);

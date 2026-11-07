@@ -32,6 +32,7 @@ import 'profiles/ui/theme/app_theme.dart';
 import 'package:provider/provider.dart' as doc_provider;
 import 'docs_feature/services/local_storage_service.dart' as doc_storage;
 import 'docs_feature/providers/document_provider.dart';
+import 'docs_feature/services/docs_vault_backup.dart';
 import 'docs_feature/screens/home_screen.dart';
 import 'docs_feature/services/auth_service.dart';
 
@@ -39,6 +40,9 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await NotificationService().init();
   await doc_storage.LocalStorageService.init();
+  // Docs come back from the vault folder after a reinstall.
+  await DocsVaultBackup.restoreIfEmpty();
+  await DocsVaultBackup.ensureCopyExists();
   runApp(
     doc_provider.MultiProvider(
       providers: [
@@ -2620,6 +2624,12 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     String? selectedDirectory = await FilePicker.getDirectoryPath();
     if (selectedDirectory != null) {
       await ref.read(vaultServiceProvider).setVaultPath(selectedDirectory);
+      // Bring Docs back from this folder if the app has none; otherwise save a copy into it.
+      if (await DocsVaultBackup.restoreIfEmpty()) {
+        await DocumentProvider.current?.reload();
+      } else {
+        DocsVaultBackup.scheduleSave();
+      }
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt('last_sync_timestamp_ms', DateTime.now().millisecondsSinceEpoch);
       ref.invalidate(vaultPathProvider);

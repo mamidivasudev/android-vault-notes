@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/document_model.dart';
 import '../services/local_storage_service.dart';
+import '../services/docs_vault_backup.dart';
 import '../services/notification_service.dart';
 
 class DocumentProvider with ChangeNotifier {
@@ -121,6 +122,7 @@ class DocumentProvider with ChangeNotifier {
     await _storageService.addDocument(doc);
     _documents.add(doc);
     notifyListeners();
+    DocsVaultBackup.scheduleSave();
   }
 
   Future<void> updateDocument(DocumentModel doc) async {
@@ -130,6 +132,7 @@ class DocumentProvider with ChangeNotifier {
       _documents[index] = doc;
       notifyListeners();
     }
+    DocsVaultBackup.scheduleSave();
   }
 
   Future<void> deleteDocument(String id) async {
@@ -149,5 +152,6 @@ class DocumentProvider with ChangeNotifier {
         } catch (_) {}
       }
     }
+    DocsVaultBackup.scheduleSave();
   }
 }

@@ -188,7 +188,7 @@ class VaultService {
       final dir = Directory('$path/$backupFolderName/${stamp}_$reason');
       await dir.create(recursive: true);
       var copied = 0;
-      for (final name in dataFiles) {
+      for (final name in [...dataFiles, 'docs_backup.zip']) {
         final f = File('$path/$name');
         if (await f.exists()) {
           await f.copy('${dir.path}/$name');

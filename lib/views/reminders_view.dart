@@ -336,7 +336,7 @@ class _RemindersViewState extends ConsumerState<RemindersView> {
                                 TextButton(
                                   onPressed: () {
                                     Navigator.pop(context);
-                                    deleteRemindersWithUndo(this.context, ref, [reminder]);
+                                    deleteRemindersWithUndo(this.context, ref, [reminder], confirm: false);
                                   },
                                   child: const Text('Delete', style: TextStyle(color: Colors.red)),
                                 ),

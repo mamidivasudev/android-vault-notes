@@ -176,7 +176,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
               ),
             );
             if (confirm == true && context.mounted) {
-              deleteBillsWithUndo(context, ref, [loan]);
+              deleteBillsWithUndo(context, ref, [loan], confirm: false);
               setSheetState(() {});
             }
           }
@@ -2926,7 +2926,7 @@ class _BillsViewState extends ConsumerState<BillsView> {
                       TextButton(
                         onPressed: () {
                           Navigator.pop(c);
-                          deleteBillsWithUndo(context, ref, [bill]);
+                          deleteBillsWithUndo(context, ref, [bill], confirm: false);
                         },
                         child: const Text('Delete',
                             style: TextStyle(color: Colors.red)),

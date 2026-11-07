@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../models.dart';
 import '../providers.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/top_toast.dart';
 
 class RecycleBinView extends ConsumerStatefulWidget {
   const RecycleBinView({super.key});
@@ -200,7 +201,11 @@ class _RecycleBinViewState extends ConsumerState<RecycleBinView> with SingleTick
   Widget _buildOptions({Note? note, Expense? expense, LinkItem? link}) {
     return PopupMenuButton<String>(
       icon: const Icon(Icons.more_vert, color: Colors.grey),
-      onSelected: (val) {
+      onSelected: (val) async {
+        if (val == 'delete' &&
+            !await confirmYesNo(context, 'Delete forever?', 'This item will be deleted permanently and cannot be restored.')) {
+          return;
+        }
         if (val == 'restore') {
           if (note != null) ref.read(deletedNotesProvider.notifier).restoreNote(note.id);
           if (expense != null) ref.read(deletedExpensesProvider.notifier).restoreExpense(expense.id);

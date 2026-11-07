@@ -7,6 +7,7 @@ import '../widgets/note_card.dart';
 import '../widgets/empty_state.dart';
 import 'note_editor.dart';
 import '../main_helpers.dart';
+import '../widgets/top_toast.dart';
 
 class NotesView extends ConsumerStatefulWidget {
   const NotesView({super.key});
@@ -263,9 +264,9 @@ class _NotesViewState extends ConsumerState<NotesView> {
                   ref.read(notesProvider.notifier).togglePin(note.id);
                   return false;
                 }
-                return true;
+                return confirmYesNo(context, 'Delete?', 'Move this note to the Recycle Bin?');
               },
-              onDismissed: (_) => deleteNotesWithUndo(context, ref, [note.id]),
+              onDismissed: (_) => deleteNotesWithUndo(context, ref, [note.id], confirm: false),
               child: child,
             );
           },

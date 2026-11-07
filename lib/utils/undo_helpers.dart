@@ -3,26 +3,31 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models.dart';
 import '../providers.dart';
+import '../widgets/top_toast.dart';
 
-/// Shows "<message>  UNDO" and runs [onUndo] if tapped.
+/// Shows a red "<message>  UNDO" toast at the top and runs [onUndo] if tapped.
 void showUndoSnackBar(ScaffoldMessengerState messenger, String message, Future<void> Function() onUndo) {
   messenger.hideCurrentSnackBar();
-  messenger.showSnackBar(
-    SnackBar(
-      content: Text(message),
-      duration: const Duration(seconds: 5),
-      // Snackbars with a button stay open forever by default; close after
-      // the duration and offer an X to close at once.
-      persist: false,
-      showCloseIcon: true,
-      action: SnackBarAction(label: 'UNDO', onPressed: () => onUndo()),
-    ),
+  showTopToast(
+    messenger.context,
+    message,
+    icon: Icons.delete,
+    color: kToastRed,
+    actionLabel: 'UNDO',
+    onAction: () => onUndo(),
   );
 }
 
 /// Deletes bills (and their reminders) with an Undo that restores both.
-void deleteBillsWithUndo(BuildContext context, WidgetRef ref, List<Bill> bills) {
-  if (bills.isEmpty) return;
+/// Asks Yes/No first unless [confirm] is false. Returns true if deleted.
+Future<bool> deleteBillsWithUndo(BuildContext context, WidgetRef ref, List<Bill> bills, {bool confirm = true}) async {
+  if (bills.isEmpty) return false;
+  if (confirm &&
+      !await confirmYesNo(context, 'Delete?',
+          bills.length == 1 ? 'Delete "${bills.first.title}"?' : 'Delete ${bills.length} bills?')) {
+    return false;
+  }
+  if (!context.mounted) return false;
   final messenger = ScaffoldMessenger.of(context);
   final notifier = ref.read(billsProvider.notifier);
   notifier.deleteBills(bills.map((b) => b.id));
@@ -31,11 +36,19 @@ void deleteBillsWithUndo(BuildContext context, WidgetRef ref, List<Bill> bills) 
     bills.length == 1 ? '${bills.first.title} deleted' : '${bills.length} bills deleted',
     () => notifier.restoreBills(bills),
   );
+  return true;
 }
 
 /// Deletes reminders with an Undo that restores them (and their alerts).
-void deleteRemindersWithUndo(BuildContext context, WidgetRef ref, List<Reminder> reminders) {
-  if (reminders.isEmpty) return;
+Future<bool> deleteRemindersWithUndo(BuildContext context, WidgetRef ref, List<Reminder> reminders,
+    {bool confirm = true}) async {
+  if (reminders.isEmpty) return false;
+  if (confirm &&
+      !await confirmYesNo(context, 'Delete?',
+          reminders.length == 1 ? 'Delete this reminder?' : 'Delete ${reminders.length} reminders?')) {
+    return false;
+  }
+  if (!context.mounted) return false;
   final messenger = ScaffoldMessenger.of(context);
   final notifier = ref.read(remindersProvider.notifier);
   notifier.deleteReminders(reminders.map((r) => r.id).toList());
@@ -44,10 +57,16 @@ void deleteRemindersWithUndo(BuildContext context, WidgetRef ref, List<Reminder>
     reminders.length == 1 ? 'Reminder deleted' : '${reminders.length} reminders deleted',
     () => notifier.restoreReminders(reminders),
   );
+  return true;
 }
 
 /// Deletes a table with an Undo that puts it back.
-void deleteTableWithUndo(BuildContext context, WidgetRef ref, VaultTable table) {
+Future<bool> deleteTableWithUndo(BuildContext context, WidgetRef ref, VaultTable table, {bool confirm = true}) async {
+  if (confirm &&
+      !await confirmYesNo(context, 'Delete?', 'Delete table "${table.title.isEmpty ? 'Untitled' : table.title}"?')) {
+    return false;
+  }
+  if (!context.mounted) return false;
   final messenger = ScaffoldMessenger.of(context);
   final notifier = ref.read(tablesProvider.notifier);
   notifier.deleteTable(table.id);
@@ -56,18 +75,29 @@ void deleteTableWithUndo(BuildContext context, WidgetRef ref, VaultTable table) 
     'Table "${table.title.isEmpty ? 'Untitled' : table.title}" deleted',
     () => notifier.restoreTable(table),
   );
+  return true;
 }
 
 /// Deletes grocery items with an Undo that puts them back in place.
-void deleteGroceryWithUndo(BuildContext context, WidgetRef ref, Set<String> ids) {
-  if (ids.isEmpty) return;
-  final messenger = ScaffoldMessenger.of(context);
+Future<bool> deleteGroceryWithUndo(BuildContext context, WidgetRef ref, Set<String> ids, {bool confirm = true}) async {
+  if (ids.isEmpty) return false;
   final notifier = ref.read(groceryProvider.notifier);
   final removed = ref.read(groceryProvider).where((i) => ids.contains(i.id)).toList();
+  if (confirm &&
+      !await confirmYesNo(context, 'Remove?',
+          removed.length == 1 ? 'Remove ${removed.first.name} from your list?' : 'Remove ${removed.length} items?')) {
+    return false;
+  }
+  if (!context.mounted) return false;
   notifier.deleteMultiple(ids);
-  showUndoSnackBar(
-    messenger,
-    removed.length == 1 ? '"${removed.first.name}" removed' : '${removed.length} items removed',
-    () => notifier.restoreItems(removed),
+  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+  showTopToast(
+    context,
+    removed.length == 1 ? '${removed.first.name} removed' : '${removed.length} items removed',
+    icon: Icons.remove_circle,
+    color: kToastRed,
+    actionLabel: 'UNDO',
+    onAction: () => notifier.restoreItems(removed),
   );
+  return true;
 }

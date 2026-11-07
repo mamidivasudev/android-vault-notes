@@ -6,6 +6,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../models.dart';
 import '../providers.dart';
 import '../utils/undo_helpers.dart';
+import '../widgets/top_toast.dart';
 import '../widgets/category_chip_bar.dart';
 import '../widgets/empty_state.dart';
 import '../main_helpers.dart';
@@ -503,7 +504,7 @@ class _TableCard extends ConsumerWidget {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              deleteTableWithUndo(outerContext, ref, table);
+              deleteTableWithUndo(outerContext, ref, table, confirm: false);
             },
             child: const Text('Delete', style: TextStyle(color: Colors.red)),
           ),
@@ -1818,14 +1819,18 @@ class _TableEditorDialogState extends ConsumerState<TableEditorDialog> {
                 label: 'Del Row',
                 color: Colors.redAccent,
                 activeColor: Colors.redAccent,
-                onPressed: () => _deleteRow(r),
+                onPressed: () async {
+                  if (await confirmYesNo(context, 'Delete row?', 'Delete row ${r + 1}?')) _deleteRow(r);
+                },
               ),
             _buildToolbarButton(
               icon: Icons.delete_outline,
               label: 'Del Col',
               color: Colors.redAccent,
               activeColor: Colors.redAccent,
-              onPressed: () => _deleteColumn(c),
+              onPressed: () async {
+                if (await confirmYesNo(context, 'Delete column?', 'Delete this column and its values?')) _deleteColumn(c);
+              },
             ),
             const VerticalDivider(),
             _buildToolbarButton(

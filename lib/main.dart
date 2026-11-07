@@ -2318,8 +2318,9 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              deleteGroceryWithUndo(this.context, ref, Set<String>.from(ids));
+              deleteGroceryWithUndo(this.context, ref, Set<String>.from(ids), confirm: false);
               ref.read(selectedGroceryProvider.notifier).clear();
+              ref.read(isSelectionModeProvider.notifier).setState(false);
             },
             child: const Text('Delete', style: TextStyle(color: Colors.red)),
           ),
@@ -2412,7 +2413,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
           TextButton(onPressed: () {
             ref.read(selectedNotesProvider.notifier).clear();
             Navigator.pop(context);
-            deleteNotesWithUndo(this.context, ref, selectedIds);
+            deleteNotesWithUndo(this.context, ref, selectedIds, confirm: false);
           }, child: const Text('Delete', style: TextStyle(color: Colors.red))),
         ],
       ),
@@ -2472,7 +2473,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
             final removed = ref.read(remindersProvider).where((r) => selectedIds.contains(r.id)).toList();
             ref.read(selectedRemindersProvider.notifier).clear();
             Navigator.pop(context);
-            deleteRemindersWithUndo(this.context, ref, removed);
+            deleteRemindersWithUndo(this.context, ref, removed, confirm: false);
           }, child: const Text('Delete', style: TextStyle(color: Colors.red))),
         ],
       ),
@@ -2492,7 +2493,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
             final removed = ref.read(billsProvider).where((b) => selectedIds.contains(b.id)).toList();
             ref.read(selectedBillsProvider.notifier).clear();
             Navigator.pop(context);
-            deleteBillsWithUndo(this.context, ref, removed);
+            deleteBillsWithUndo(this.context, ref, removed, confirm: false);
           }, child: const Text('Delete', style: TextStyle(color: Colors.red))),
         ],
       ),

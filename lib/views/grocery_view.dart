@@ -7,6 +7,7 @@ import '../models.dart';
 import '../providers.dart';
 import '../utils/grocery_catalog.dart';
 import '../utils/undo_helpers.dart';
+import '../widgets/top_toast.dart';
 
 const _infoBlue = Color(0xFF3B6FD8);
 const _removeRed = Color(0xFFD9534F);
@@ -169,7 +170,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
     _confirm(
       'Clear bought items?',
       'Remove ${ids.length} bought item${ids.length == 1 ? '' : 's'} from the list?',
-      () async => deleteGroceryWithUndo(context, ref, ids),
+      () async => deleteGroceryWithUndo(context, ref, ids, confirm: false),
     );
   }
 
@@ -193,7 +194,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
         _confirm(
           'Clear the whole list?',
           'Remove all ${items.length} item${items.length == 1 ? '' : 's'}?',
-          () async => deleteGroceryWithUndo(context, ref, items.map((i) => i.id).toSet()),
+          () async => deleteGroceryWithUndo(context, ref, items.map((i) => i.id).toSet(), confirm: false),
         );
         break;
       case 'catalog':
@@ -396,15 +397,15 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
           const SizedBox(height: 6),
           Center(
             child: Text(
-              'Type above to add items, or browse the catalog.',
+              'Type above to add items, or browse products.',
               style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6)),
             ),
           ),
           const SizedBox(height: 16),
           Center(
             child: OutlinedButton.icon(
-              icon: const Icon(Icons.menu_book_outlined),
-              label: const Text('Browse catalog'),
+              icon: const Icon(Icons.storefront_rounded),
+              label: const Text('Browse products'),
               onPressed: () => _openBrowse(),
             ),
           ),
@@ -435,7 +436,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
             }
           },
           onEdit: () => showGroceryItemEditor(context, ref, item),
-          onDelete: () => deleteGroceryWithUndo(context, ref, {item.id}),
+          onDelete: () => deleteGroceryWithUndo(context, ref, {item.id}, confirm: false),
         );
 
     return ListView(
@@ -636,6 +637,7 @@ class _GroceryRow extends StatelessWidget {
           padding: const EdgeInsets.only(right: 24),
           child: const Icon(Icons.delete_outline, color: Colors.white),
         ),
+        confirmDismiss: (_) => confirmYesNo(context, 'Remove?', 'Remove ${item.name} from your list?'),
         onDismissed: (_) => onDelete(),
         child: card,
       ),
@@ -901,10 +903,9 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
               TextButton.icon(
                 icon: const Icon(Icons.delete_outline, color: Colors.red),
                 label: const Text('Delete', style: TextStyle(color: Colors.red)),
-                onPressed: () {
+                onPressed: () async {
                   final navigator = Navigator.of(context);
-                  deleteGroceryWithUndo(context, ref, {widget.item.id});
-                  navigator.pop();
+                  if (await deleteGroceryWithUndo(context, ref, {widget.item.id})) navigator.pop();
                 },
               ),
               const Spacer(),
@@ -1212,76 +1213,20 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
   }
 }
 
-// ── "Added" toast ───────────────────────────────────────────────────────────
+// ── Toasts ──────────────────────────────────────────────────────────────────
 
-OverlayEntry? _groceryToast;
-
-/// Short "✓ item added" pill that drops in at the top of the screen.
+/// Short "✓ item added" pill at the top of the screen.
 void showGroceryAddedToast(BuildContext context, String label) =>
     showGroceryToast(context, '$label added');
 
-/// Small coloured pill that drops in at the top of the screen and fades away
-/// by itself. Used as feedback for every Grocery action.
+/// Grocery feedback toast (see [showTopToast]).
 void showGroceryToast(
   BuildContext context,
   String message, {
   IconData icon = Icons.check_circle,
   Color color = _green,
-}) {
-  final overlay = Overlay.maybeOf(context, rootOverlay: true);
-  if (overlay == null) return;
-  _groceryToast?.remove();
-  late final OverlayEntry entry;
-  entry = OverlayEntry(
-    builder: (ctx) => Positioned(
-      top: MediaQuery.viewPaddingOf(ctx).top + 12,
-      left: 24,
-      right: 24,
-      child: IgnorePointer(
-        child: Center(
-          child: TweenAnimationBuilder<double>(
-            tween: Tween(begin: 0, end: 1),
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            builder: (_, t, child) => Opacity(
-              opacity: t,
-              child: Transform.translate(offset: Offset(0, -16 * (1 - t)), child: child),
-            ),
-            child: Material(
-              color: color,
-              elevation: 6,
-              borderRadius: BorderRadius.circular(24),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(icon, color: Colors.white, size: 18),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        message,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-  _groceryToast = entry;
-  overlay.insert(entry);
-  Future.delayed(const Duration(milliseconds: 1600), () {
-    if (_groceryToast == entry) _groceryToast = null;
-    if (entry.mounted) entry.remove();
-  });
-}
+}) =>
+    showTopToast(context, message, icon: icon, color: color);
 
 // ── Quantity suggestion chips ───────────────────────────────────────────────
 

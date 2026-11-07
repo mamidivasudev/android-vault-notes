@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../main_helpers.dart';
 import '../models.dart';
 import '../providers.dart';
+import '../widgets/top_toast.dart';
 
 // ---------- Mileage View ----------
 class MileageView extends ConsumerStatefulWidget {
@@ -124,20 +125,7 @@ class _MileageViewState extends ConsumerState<MileageView> {
       ref.read(serviceEntriesProvider.notifier).deleteEntry(entry.id);
       if (mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Service entry deleted'),
-            // Snackbars with a button stay open forever by default; close after
-            // the duration and offer an X to close at once.
-            persist: false,
-            showCloseIcon: true,
-            action: SnackBarAction(
-              label: 'Undo',
-              onPressed: () => ref.read(serviceEntriesProvider.notifier).restoreEntry(entry),
-            ),
-            duration: const Duration(seconds: 4),
-          ),
-        );
+        showTopToast(context, 'Service entry deleted', icon: Icons.delete, color: kToastRed, actionLabel: 'UNDO', onAction: () => ref.read(serviceEntriesProvider.notifier).restoreEntry(entry));
       }
     }
   }
@@ -165,22 +153,7 @@ class _MileageViewState extends ConsumerState<MileageView> {
       ref.read(fuelEntriesProvider.notifier).deleteEntry(entry);
       if (mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Entry deleted'),
-            // Snackbars with a button stay open forever by default; close after
-            // the duration and offer an X to close at once.
-            persist: false,
-            showCloseIcon: true,
-            action: SnackBarAction(
-              label: 'Undo',
-              onPressed: () {
-                ref.read(fuelEntriesProvider.notifier).restoreEntry(entry);
-              },
-            ),
-            duration: const Duration(seconds: 4),
-          ),
-        );
+        showTopToast(context, 'Entry deleted', icon: Icons.delete, color: kToastRed, actionLabel: 'UNDO', onAction: () => ref.read(fuelEntriesProvider.notifier).restoreEntry(entry));
       }
     }
   }

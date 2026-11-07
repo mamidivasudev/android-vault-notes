@@ -15,6 +15,7 @@ import 'views/note_editor.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'widgets/note_card.dart' show NoteColors;
+import 'widgets/top_toast.dart';
 
 // --- Category Helpers ---
 
@@ -548,30 +549,32 @@ void _moveNoteDialog(BuildContext context, WidgetRef ref, Note note) {
 }
 
 /// Moves notes to the Recycle Bin and shows a snackbar with an Undo action.
-void deleteNotesWithUndo(BuildContext context, WidgetRef ref, List<String> ids) {
-  if (ids.isEmpty) return;
-  final messenger = ScaffoldMessenger.of(context);
+/// Moves notes to the Recycle Bin (asking Yes/No first unless [confirm] is
+/// false) and shows an UNDO toast. Returns true if deleted.
+Future<bool> deleteNotesWithUndo(BuildContext context, WidgetRef ref, List<String> ids, {bool confirm = true}) async {
+  if (ids.isEmpty) return false;
+  if (confirm &&
+      !await confirmYesNo(context, 'Delete?',
+          ids.length == 1 ? 'Move this note to the Recycle Bin?' : 'Move ${ids.length} notes to the Recycle Bin?')) {
+    return false;
+  }
+  if (!context.mounted) return false;
+  ScaffoldMessenger.of(context).hideCurrentSnackBar();
   ref.read(notesProvider.notifier).deleteNotes(ids);
-  messenger.hideCurrentSnackBar();
-  messenger.showSnackBar(
-    SnackBar(
-      content: Text(ids.length == 1 ? 'Note moved to Recycle Bin' : '${ids.length} notes moved to Recycle Bin'),
-      duration: const Duration(seconds: 5),
-      // Snackbars with a button stay open forever by default; close after
-      // the duration and offer an X to close at once.
-      persist: false,
-      showCloseIcon: true,
-      action: SnackBarAction(
-        label: 'UNDO',
-        onPressed: () async {
-          final bin = ref.read(deletedNotesProvider.notifier);
-          for (final id in ids) {
-            await bin.restoreNote(id);
-          }
-        },
-      ),
-    ),
+  showTopToast(
+    context,
+    ids.length == 1 ? 'Note moved to Recycle Bin' : '${ids.length} notes moved to Recycle Bin',
+    icon: Icons.delete,
+    color: kToastRed,
+    actionLabel: 'UNDO',
+    onAction: () async {
+      final bin = ref.read(deletedNotesProvider.notifier);
+      for (final id in ids) {
+        await bin.restoreNote(id);
+      }
+    },
   );
+  return true;
 }
 
 /// Title + body as plain text (checklists become "☐ item" / "☑ item").
@@ -1145,7 +1148,7 @@ void addExpenseCategory(BuildContext context, WidgetRef ref) {
 void showExpenseCategoryOptions(BuildContext context, WidgetRef ref, String category) {
   showModalBottomSheet(
     context: context,
-    builder: (context) => SafeArea(
+    builder: (sheetContext) => SafeArea(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1154,15 +1157,16 @@ void showExpenseCategoryOptions(BuildContext context, WidgetRef ref, String cate
               leading: const Icon(Icons.edit),
               title: const Text('Rename Category'),
               onTap: () {
-                Navigator.pop(context);
+                Navigator.pop(sheetContext);
                 _renameExpenseCategory(context, ref, category);
               },
             ),
             ListTile(
               leading: const Icon(Icons.delete, color: Colors.red),
               title: const Text('Delete Category'),
-              onTap: () {
-                Navigator.pop(context);
+              onTap: () async {
+                Navigator.pop(sheetContext);
+                if (!await confirmYesNo(context, 'Delete?', 'Delete category "$category"?')) return;
                 ref.read(expenseCategoriesProvider.notifier).deleteCategory(category);
               },
             ),
@@ -1171,7 +1175,7 @@ void showExpenseCategoryOptions(BuildContext context, WidgetRef ref, String cate
             leading: const Icon(Icons.account_balance_wallet_outlined, color: Color(0xFF1D63D2)),
             title: const Text('Set Monthly Budget'),
             onTap: () {
-              Navigator.pop(context);
+              Navigator.pop(sheetContext);
               _showBudgetDialog(context, ref, category);
             },
           ),
@@ -1205,9 +1209,10 @@ void _showBudgetDialog(BuildContext context, WidgetRef ref, String category) {
       actions: [
         if (currentBudget != null)
           TextButton(
-            onPressed: () {
+            onPressed: () async {
+              if (!await confirmYesNo(context, 'Clear budget?', 'Remove the monthly budget for $category?')) return;
               ref.read(expenseBudgetProvider.notifier).clearBudget(category);
-              Navigator.pop(context);
+              if (context.mounted) Navigator.pop(context);
             },
             child: const Text('Clear Budget', style: TextStyle(color: Colors.red)),
           ),

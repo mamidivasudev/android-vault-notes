@@ -5,6 +5,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../providers/document_provider.dart';
 import '../utils/app_theme.dart';
 import '../widgets/glass_container.dart';
+import '../../widgets/top_toast.dart';
 
 class ManageCategoriesScreen extends StatefulWidget {
   const ManageCategoriesScreen({super.key});
@@ -204,7 +205,11 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen> {
                         ),
                         IconButton(
                           icon: const Icon(Icons.delete_outline_rounded, color: AppColors.expired, size: 20),
-                          onPressed: () => provider.deleteCategory(category),
+                          onPressed: () async {
+                            if (await confirmYesNo(context, 'Delete?', 'Delete category "$category"?')) {
+                              provider.deleteCategory(category);
+                            }
+                          },
                         ),
                       ],
                     ),

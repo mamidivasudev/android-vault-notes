@@ -1,6 +1,11 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models.dart';
@@ -22,21 +27,56 @@ class GroceryView extends ConsumerStatefulWidget {
   ConsumerState<GroceryView> createState() => _GroceryViewState();
 }
 
+const _flyDuration = Duration(milliseconds: 320);
+
+/// The list as a neat plain-text document, to-buy items first.
+String groceryListText(List<GroceryItem> items, DateTime when) {
+  const width = 36;
+  final line = '-' * width;
+  final out = StringBuffer()
+    ..writeln('GROCERY LIST')
+    ..writeln('Saved: ${DateFormat('dd MMM yyyy, h:mm a').format(when)}')
+    ..writeln('=' * width);
+
+  void section(String title, String mark, List<GroceryItem> list) {
+    if (list.isEmpty) return;
+    out
+      ..writeln()
+      ..writeln('$title (${list.length})')
+      ..writeln(line);
+    for (final i in list) {
+      final name = '$mark ${i.name}';
+      out.writeln(i.quantityLabel.isEmpty ? name : '${name.padRight(width - 10)}  ${i.quantityLabel}');
+    }
+  }
+
+  section('TO BUY', '[ ]', items.where((i) => !i.isPurchased).toList());
+  section('BOUGHT', '[x]', items.where((i) => i.isPurchased).toList());
+  return out.toString();
+}
+
 class _GroceryViewState extends ConsumerState<GroceryView> {
   final _input = TextEditingController();
   final _focus = FocusNode();
   bool _boughtTab = false; // false = To buy, true = Bought
+  final _pages = PageController(keepPage: false);
+  final Set<String> _flying = {}; // cards sliding over to the other tab
 
   @override
   void initState() {
     super.initState();
     _input.addListener(() {
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      // Typing replaces the tabs with suggestions; come back on To buy.
+      setState(() {
+        if (_input.text.trim().isNotEmpty) _boughtTab = false;
+      });
     });
   }
 
   @override
   void dispose() {
+    _pages.dispose();
     _input.dispose();
     _focus.dispose();
     super.dispose();
@@ -148,6 +188,27 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
     Share.share(buffer.toString().trim());
   }
 
+  /// Lets the user pick where to save the list as a neat .txt file.
+  Future<void> _saveAsText(List<GroceryItem> items) async {
+    if (items.isEmpty) {
+      showGroceryToast(context, 'Nothing to save — the list is empty', icon: Icons.info, color: _infoBlue);
+      return;
+    }
+    final now = DateTime.now();
+    try {
+      final saved = await FilePicker.saveFile(
+        dialogTitle: 'Save grocery list',
+        fileName: 'Grocery_List_${DateFormat('yyyy-MM-dd').format(now)}.txt',
+        type: FileType.custom,
+        allowedExtensions: const ['txt'],
+        bytes: Uint8List.fromList(utf8.encode(groceryListText(items, now))),
+      );
+      if (saved != null && mounted) showGroceryToast(context, 'List saved', icon: Icons.save_alt);
+    } catch (e) {
+      if (mounted) showGroceryToast(context, 'Could not save the list', icon: Icons.error, color: _removeRed);
+    }
+  }
+
   /// Yes / No question; runs [run] only on Yes.
   Future<void> _confirm(String title, String message, Future<void> Function() run) async {
     final ok = await showDialog<bool>(
@@ -192,14 +253,13 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       case 'clearAll':
         if (items.isEmpty) return;
         _confirm(
-          'Clear the whole list?',
+          'Clear items list?',
           'Remove all ${items.length} item${items.length == 1 ? '' : 's'}?',
           () async => deleteGroceryWithUndo(context, ref, items.map((i) => i.id).toSet(), confirm: false),
         );
         break;
-      case 'shopOrder':
-        final order = ref.read(groceryShopOrderProvider.notifier);
-        order.state = !ref.read(groceryShopOrderProvider);
+      case 'saveTxt':
+        _saveAsText(items);
         break;
       case 'catalog':
         _openBrowse();
@@ -219,7 +279,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
 
     return Column(
       children: [
-        _buildInput(),
+        _buildInput(items, bought),
         _buildHeader(items, toBuy, bought),
         Expanded(
           child: typing ? _buildSuggestions(items) : _buildList(items, toBuy, bought),
@@ -246,37 +306,31 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
     );
   }
 
-  /// Share and ⋮ menu, shown at the end of the tabs row.
+  /// ⋮ menu, shown after the Browse products button.
   List<Widget> _listActions(List<GroceryItem> items, List<GroceryItem> bought) {
-    final shopOrder = ref.watch(groceryShopOrderProvider);
     return [
-      IconButton(
-        tooltip: 'Share list',
-        visualDensity: VisualDensity.compact,
-        icon: const Icon(Icons.share_outlined),
-        onPressed: () => _share(items),
-      ),
       PopupMenuButton<String>(
         tooltip: 'More',
         onSelected: (v) => _onMenu(v, items),
         itemBuilder: (_) => [
           const PopupMenuItem(value: 'catalog', child: ListTile(leading: Icon(Icons.storefront_rounded), title: Text('Browse products'), contentPadding: EdgeInsets.zero)),
-          CheckedPopupMenuItem(value: 'shopOrder', checked: shopOrder, child: const Text('Sort by shop section')),
+          const PopupMenuItem(value: 'share', child: ListTile(leading: Icon(Icons.share_outlined), title: Text('Share list'), contentPadding: EdgeInsets.zero)),
+          const PopupMenuItem(value: 'saveTxt', child: ListTile(leading: Icon(Icons.save_alt), title: Text('Save list'), contentPadding: EdgeInsets.zero)),
           if (bought.isNotEmpty)
             const PopupMenuItem(value: 'shopAgain', child: ListTile(leading: Icon(Icons.replay), title: Text('Shop again'), contentPadding: EdgeInsets.zero)),
           if (bought.isNotEmpty)
             const PopupMenuItem(value: 'clearBought', child: ListTile(leading: Icon(Icons.playlist_remove), title: Text('Clear bought'), contentPadding: EdgeInsets.zero)),
           if (items.isNotEmpty)
-            const PopupMenuItem(value: 'clearAll', child: ListTile(leading: Icon(Icons.delete_sweep_outlined, color: Colors.red), title: Text('Clear whole list'), contentPadding: EdgeInsets.zero)),
+            const PopupMenuItem(value: 'clearAll', child: ListTile(leading: Icon(Icons.delete_sweep_outlined, color: Colors.red), title: Text('Clear items list'), contentPadding: EdgeInsets.zero)),
         ],
       ),
     ];
   }
 
-  Widget _buildInput() {
+  Widget _buildInput(List<GroceryItem> items, List<GroceryItem> bought) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+      padding: const EdgeInsets.fromLTRB(12, 4, 0, 6),
       child: Row(
         children: [
           Expanded(
@@ -290,7 +344,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
                 onSubmitted: (_) => _addTyped(),
                 style: const TextStyle(fontSize: 14),
                 decoration: InputDecoration(
-                  hintText: 'Search or add item',
+                  hintText: 'Search or add',
                   prefixIcon: const Icon(Icons.search, size: 20),
                   suffixIcon: _input.text.isEmpty
                       ? null
@@ -320,7 +374,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
             height: 42,
             child: FilledButton.tonalIcon(
               style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 14),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
               ),
               icon: const Icon(Icons.storefront_rounded, size: 20),
@@ -328,6 +382,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
               onPressed: () => _openBrowse(),
             ),
           ),
+          ..._listActions(items, bought),
         ],
       ),
     );
@@ -380,6 +435,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
     final selecting = selected.isNotEmpty || ref.watch(isSelectionModeProvider);
 
     if (items.isEmpty) {
+      _boughtTab = false; // the tabs are rebuilt on To buy next time
       return ListView(
         padding: const EdgeInsets.only(bottom: 24),
         children: [
@@ -411,12 +467,20 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
           item: item,
           selecting: selecting,
           selected: selected.contains(item.id),
-          onToggle: () {
+          flying: _flying.contains(item.id),
+          onToggle: () async {
             if (selecting) {
               ref.read(selectedGroceryProvider.notifier).toggle(item.id);
             } else {
+              if (!_flying.add(item.id)) return; // already on its way
               HapticFeedback.lightImpact();
-              ref.read(groceryProvider.notifier).toggleItem(item.id);
+              setState(() {});
+              final notifier = ref.read(groceryProvider.notifier);
+              // Let the card slide away first, then move it to the other list.
+              Future.delayed(_flyDuration, () async {
+                await notifier.toggleItem(item.id);
+                if (mounted) setState(() => _flying.remove(item.id));
+              });
               item.isPurchased
                   ? showGroceryToast(context, '${item.name} back on the list', icon: Icons.undo, color: _infoBlue)
                   : showGroceryToast(context, '${item.name} bought');
@@ -424,28 +488,49 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
           },
           onLongPress: () {
             if (!selecting) {
+              ref.read(grocerySelectBoughtProvider.notifier).set(_boughtTab);
               ref.read(isSelectionModeProvider.notifier).setState(true);
               ref.read(selectedGroceryProvider.notifier).toggle(item.id);
             }
           },
           onEdit: () => showGroceryItemEditor(context, ref, item),
-          onDelete: () => deleteGroceryWithUndo(context, ref, {item.id}, confirm: false),
         );
 
     final muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6);
-    var shown = _boughtTab ? bought : toBuy;
-    if (!_boughtTab && ref.watch(groceryShopOrderProvider)) {
-      final position = {for (var i = 0; i < toBuy.length; i++) toBuy[i].id: i};
-      shown = [...toBuy]..sort((a, b) {
-          final byShop = groceryCategoryRank(a.category).compareTo(groceryCategoryRank(b.category));
-          return byShop != 0 ? byShop : position[a.id]!.compareTo(position[b.id]!);
-        });
-    }
+    Widget page(List<GroceryItem> list, String emptyText, Color emptyColor) => list.isEmpty
+        ? Center(child: Text(emptyText, style: TextStyle(color: emptyColor, fontWeight: FontWeight.w600)))
+        : ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.only(bottom: 32),
+            children: [for (final item in list) row(item)],
+          );
+
+    // A page with its Clear button, which turns on the tick boxes.
+    Widget withClear(List<GroceryItem> list, bool boughtPage, String emptyText, Color emptyColor) => Column(
+          children: [
+            if (list.isNotEmpty && !selecting)
+              Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: TextButton(
+                    style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                    onPressed: () {
+                      ref.read(grocerySelectBoughtProvider.notifier).set(boughtPage);
+                      ref.read(isSelectionModeProvider.notifier).setState(true);
+                    },
+                    child: const Text('Clear'),
+                  ),
+                ),
+              ),
+            Expanded(child: page(list, emptyText, emptyColor)),
+          ],
+        );
 
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 2, 0, 4),
+          padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
           child: Row(
             children: [
               Expanded(
@@ -453,42 +538,96 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
                   showSelectedIcon: false,
                   style: const ButtonStyle(visualDensity: VisualDensity.compact),
                   segments: [
-                    ButtonSegment(value: false, label: Text('To buy (${toBuy.length})')),
-                    ButtonSegment(value: true, label: Text('Bought (${bought.length})')),
+                    ButtonSegment(value: false, label: _TabLabel(title: 'To buy', count: toBuy.length)),
+                    ButtonSegment(value: true, label: _TabLabel(title: 'Bought', count: bought.length)),
                   ],
                   selected: {_boughtTab},
-                  onSelectionChanged: (v) => setState(() => _boughtTab = v.first),
+                  // The tab stays put while items are being ticked.
+                  onSelectionChanged: selecting ? null : (v) {
+                    setState(() => _boughtTab = v.first);
+                    _pages.animateToPage(v.first ? 1 : 0, duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+                  },
                 ),
               ),
-              ..._listActions(items, bought),
             ],
           ),
         ),
-        if (_boughtTab && bought.isNotEmpty)
-          Align(
-            alignment: Alignment.centerRight,
-            child: Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: TextButton(
-                style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
-                onPressed: () => _clearBought(items),
-                child: const Text('Clear'),
-              ),
-            ),
-          ),
+        // Swipe left / right between To buy and Bought.
         Expanded(
-          child: shown.isEmpty
-              ? Center(
-                  child: Text(
-                    _boughtTab ? 'Nothing bought yet' : 'Everything is bought ✓',
-                    style: TextStyle(color: _boughtTab ? muted : _green, fontWeight: FontWeight.w600),
-                  ),
-                )
-              : ListView(
-                  keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                  padding: const EdgeInsets.only(bottom: 32),
-                  children: [for (final item in shown) row(item)],
+          child: PageView(
+            controller: _pages,
+            physics: selecting ? const NeverScrollableScrollPhysics() : null,
+            onPageChanged: (i) => setState(() => _boughtTab = i == 1),
+            children: [
+              withClear(toBuy, false, 'Everything is bought ✓', _green),
+              withClear(bought, true, 'Nothing bought yet', muted),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Tab title with its count; the count flashes green and pops when it goes up.
+class _TabLabel extends StatefulWidget {
+  final String title;
+  final int count;
+  const _TabLabel({required this.title, required this.count});
+
+  @override
+  State<_TabLabel> createState() => _TabLabelState();
+}
+
+class _TabLabelState extends State<_TabLabel> with SingleTickerProviderStateMixin {
+  late final AnimationController _flash = AnimationController(vsync: this, duration: const Duration(milliseconds: 800));
+  late final Animation<double> _glow = TweenSequence<double>([
+    TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0).chain(CurveTween(curve: Curves.easeOutBack)), weight: 25),
+    TweenSequenceItem(tween: ConstantTween(1.0), weight: 35),
+    TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0).chain(CurveTween(curve: Curves.easeIn)), weight: 40),
+  ]).animate(_flash);
+
+  @override
+  void didUpdateWidget(_TabLabel old) {
+    super.didUpdateWidget(old);
+    if (widget.count > old.count) _flash.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _flash.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(widget.title),
+        const SizedBox(width: 5),
+        AnimatedBuilder(
+          animation: _glow,
+          builder: (context, _) {
+            final t = _glow.value.clamp(0.0, 1.0);
+            return Transform.scale(
+              scale: 1 + 0.3 * _glow.value,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: _green.withValues(alpha: t),
+                  borderRadius: BorderRadius.circular(10),
                 ),
+                child: Text(
+                  '${widget.count}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: Color.lerp(DefaultTextStyle.of(context).style.color, Colors.white, t),
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ],
     );
@@ -529,26 +668,26 @@ class _GroceryRow extends StatelessWidget {
   final GroceryItem item;
   final bool selecting;
   final bool selected;
+  final bool flying; // sliding over to the other tab
   final VoidCallback onToggle;
   final VoidCallback onLongPress;
   final VoidCallback onEdit;
-  final VoidCallback onDelete;
 
   const _GroceryRow({
     super.key,
     required this.item,
     required this.selecting,
     required this.selected,
+    this.flying = false,
     required this.onToggle,
     required this.onLongPress,
     required this.onEdit,
-    required this.onDelete,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final done = item.isPurchased;
+    final done = item.isPurchased != flying; // shows the new state as soon as it is tapped
     final muted = scheme.onSurface.withValues(alpha: 0.45);
 
     final border = done ? _green.withValues(alpha: 0.55) : scheme.outlineVariant.withValues(alpha: 0.6);
@@ -662,21 +801,13 @@ class _GroceryRow extends StatelessWidget {
       ),
     );
 
-    const gap = EdgeInsets.symmetric(horizontal: 12, vertical: 3);
-    if (selecting) return Padding(padding: gap, child: card);
+    // Bought is the tab on the right: to-buy cards leave rightwards, bought ones leftwards.
     return Padding(
-      padding: gap,
-      child: Dismissible(
-        key: ValueKey('dismiss_${item.id}'),
-        direction: DismissDirection.endToStart,
-        background: Container(
-          decoration: BoxDecoration(color: Colors.red, borderRadius: radius),
-          alignment: Alignment.centerRight,
-          padding: const EdgeInsets.only(right: 24),
-          child: const Icon(Icons.delete_outline, color: Colors.white),
-        ),
-        confirmDismiss: (_) => confirmYesNo(context, 'Remove?', 'Remove ${item.name} from your list?'),
-        onDismissed: (_) => onDelete(),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+      child: AnimatedSlide(
+        offset: flying ? Offset(item.isPurchased ? -1.1 : 1.1, 0) : Offset.zero,
+        duration: _flyDuration,
+        curve: Curves.easeInCubic,
         child: card,
       ),
     );

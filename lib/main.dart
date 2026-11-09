@@ -1838,6 +1838,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
           ref.read(selectedRemindersProvider.notifier).clear();
           ref.read(selectedBillsProvider.notifier).clear();
           ref.read(selectedGroceryProvider.notifier).clear();
+          ref.read(isSelectionModeProvider.notifier).setState(false);
         }),
         title: Text(() {
           if (_currentIndex == 0) return '$noteCount selected';
@@ -2299,7 +2300,9 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
 
   void _selectAllGrocery() {
     ref.read(isSelectionModeProvider.notifier).setState(true);
-    final allIds = ref.read(groceryProvider).map((g) => g.id).toSet();
+    // Only the tab being shown, never items hidden on the other tab.
+    final onBought = ref.read(grocerySelectBoughtProvider);
+    final allIds = ref.read(groceryProvider).where((g) => g.isPurchased == onBought).map((g) => g.id).toSet();
     final selectedIds = ref.read(selectedGroceryProvider);
     
     if (selectedIds.length == allIds.length && allIds.isNotEmpty) {
@@ -2312,13 +2315,19 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
 
   void _deleteSelectedGrocery() {
     final ids = ref.read(selectedGroceryProvider);
+    if (ids.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tick the items to clear first'), duration: Duration(seconds: 2)),
+      );
+      return;
+    }
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Groceries?'),
-        content: Text('Delete ${ids.length} selected items?'),
+        title: const Text('Clear items?'),
+        content: Text('Remove ${ids.length} selected item${ids.length == 1 ? '' : 's'}?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('No')),
           TextButton(
             onPressed: () {
               Navigator.pop(context);
@@ -2326,7 +2335,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
               ref.read(selectedGroceryProvider.notifier).clear();
               ref.read(isSelectionModeProvider.notifier).setState(false);
             },
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+            child: const Text('Yes', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),

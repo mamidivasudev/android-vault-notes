@@ -113,14 +113,6 @@ abstract class _PersistedBoolNotifier extends Notifier<bool> {
   }
 }
 
-class GroceryShopOrderNotifier extends _PersistedBoolNotifier {
-  @override
-  String get prefsKey => 'grocery_shop_order';
-}
-
-/// Sort the Grocery to-buy list by shop section instead of newest first.
-final groceryShopOrderProvider = NotifierProvider<GroceryShopOrderNotifier, bool>(GroceryShopOrderNotifier.new);
-
 class NotesGridViewNotifier extends _PersistedBoolNotifier {
   @override
   String get prefsKey => 'notes_grid_view';
@@ -2817,6 +2809,16 @@ class IsSelectionModeNotifier extends Notifier<bool> {
   void setState(bool value) => state = value;
 }
 final isSelectionModeProvider = NotifierProvider<IsSelectionModeNotifier, bool>(IsSelectionModeNotifier.new);
+
+class GrocerySelectBoughtNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+  void set(bool value) => state = value;
+}
+
+/// Which Grocery tab selection mode was started on (true = Bought), so
+/// "select all" only picks the items that tab shows.
+final grocerySelectBoughtProvider = NotifierProvider<GrocerySelectBoughtNotifier, bool>(GrocerySelectBoughtNotifier.new);
 
 class SelectedGroceryNotifier extends Notifier<Set<String>> {
   @override

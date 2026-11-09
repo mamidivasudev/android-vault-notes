@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -907,7 +906,11 @@ class _SuggestionTile extends StatelessWidget {
                     padding: const EdgeInsets.only(right: 6),
                     child: Text(quantityHint!, style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700)),
                   ),
-                Icon(existing != null ? Icons.replay : Icons.add_circle, color: _green),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(color: _green, borderRadius: BorderRadius.circular(14)),
+                  child: const Text('Add', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+                ),
                 ?menu,
               ],
             ),
@@ -1282,8 +1285,16 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
 
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         title: const Row(children: [Icon(Icons.storefront_rounded), SizedBox(width: 10), Text('Browse products')]),
         actions: [
+          IconButton(
+            tooltip: 'Close',
+            iconSize: 20,
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.close),
+            onPressed: () => Navigator.pop(context),
+          ),
           PopupMenuButton<String>(
             tooltip: 'More',
             onSelected: (v) {

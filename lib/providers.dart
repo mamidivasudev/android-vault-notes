@@ -113,6 +113,14 @@ abstract class _PersistedBoolNotifier extends Notifier<bool> {
   }
 }
 
+class GroceryShopOrderNotifier extends _PersistedBoolNotifier {
+  @override
+  String get prefsKey => 'grocery_shop_order';
+}
+
+/// Sort the Grocery to-buy list by shop section instead of newest first.
+final groceryShopOrderProvider = NotifierProvider<GroceryShopOrderNotifier, bool>(GroceryShopOrderNotifier.new);
+
 class NotesGridViewNotifier extends _PersistedBoolNotifier {
   @override
   String get prefsKey => 'notes_grid_view';

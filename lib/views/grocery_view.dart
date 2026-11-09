@@ -126,10 +126,10 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
 
   /// Opens Browse products; leaves selection mode first so the list is
   /// back to normal on return.
-  void _openBrowse({bool manage = false}) {
+  void _openBrowse() {
     ref.read(selectedGroceryProvider.notifier).clear();
     ref.read(isSelectionModeProvider.notifier).setState(false);
-    Navigator.push(context, MaterialPageRoute(builder: (_) => GroceryMasterListView(manage: manage)));
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const GroceryMasterListView()));
   }
 
   // ── List actions ──────────────────────────────────────────────────────────
@@ -197,8 +197,12 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
           () async => deleteGroceryWithUndo(context, ref, items.map((i) => i.id).toSet(), confirm: false),
         );
         break;
+      case 'shopOrder':
+        final order = ref.read(groceryShopOrderProvider.notifier);
+        order.state = !ref.read(groceryShopOrderProvider);
+        break;
       case 'catalog':
-        _openBrowse(manage: true);
+        _openBrowse();
         break;
     }
   }
@@ -215,8 +219,8 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
 
     return Column(
       children: [
-        _buildHeader(items, toBuy, bought),
         _buildInput(),
+        _buildHeader(items, toBuy, bought),
         Expanded(
           child: typing ? _buildSuggestions(items) : _buildList(items, toBuy, bought),
         ),
@@ -224,60 +228,49 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
     );
   }
 
+  /// Thin progress bar; the counts are on the To buy / Bought tabs.
   Widget _buildHeader(List<GroceryItem> items, List<GroceryItem> toBuy, List<GroceryItem> bought) {
+    if (items.isEmpty) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
-    final total = items.length;
-    final progress = total == 0 ? 0.0 : bought.length / total;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 4, 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  total == 0
-                      ? 'Your list is empty'
-                      : toBuy.isEmpty
-                          ? 'All ${bought.length} bought 🎉'
-                          : '${toBuy.length} to buy · ${bought.length} bought',
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 6),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: progress,
-                    minHeight: 6,
-                    backgroundColor: scheme.onSurface.withValues(alpha: 0.08),
-                    valueColor: const AlwaysStoppedAnimation(_green),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            tooltip: 'Share list',
-            icon: const Icon(Icons.share_outlined),
-            onPressed: () => _share(items),
-          ),
-          PopupMenuButton<String>(
-            tooltip: 'More',
-            onSelected: (v) => _onMenu(v, items),
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'catalog', child: ListTile(leading: Icon(Icons.menu_book_outlined), title: Text('Browse catalog'), contentPadding: EdgeInsets.zero)),
-              if (bought.isNotEmpty)
-                const PopupMenuItem(value: 'shopAgain', child: ListTile(leading: Icon(Icons.replay), title: Text('Shop again'), contentPadding: EdgeInsets.zero)),
-              if (bought.isNotEmpty)
-                const PopupMenuItem(value: 'clearBought', child: ListTile(leading: Icon(Icons.playlist_remove), title: Text('Clear bought'), contentPadding: EdgeInsets.zero)),
-              if (items.isNotEmpty)
-                const PopupMenuItem(value: 'clearAll', child: ListTile(leading: Icon(Icons.delete_sweep_outlined, color: Colors.red), title: Text('Clear whole list'), contentPadding: EdgeInsets.zero)),
-            ],
-          ),
-        ],
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: LinearProgressIndicator(
+          value: bought.length / items.length,
+          minHeight: 4,
+          backgroundColor: scheme.onSurface.withValues(alpha: 0.08),
+          valueColor: const AlwaysStoppedAnimation(_green),
+        ),
       ),
     );
+  }
+
+  /// Share and ⋮ menu, shown at the end of the tabs row.
+  List<Widget> _listActions(List<GroceryItem> items, List<GroceryItem> bought) {
+    final shopOrder = ref.watch(groceryShopOrderProvider);
+    return [
+      IconButton(
+        tooltip: 'Share list',
+        visualDensity: VisualDensity.compact,
+        icon: const Icon(Icons.share_outlined),
+        onPressed: () => _share(items),
+      ),
+      PopupMenuButton<String>(
+        tooltip: 'More',
+        onSelected: (v) => _onMenu(v, items),
+        itemBuilder: (_) => [
+          const PopupMenuItem(value: 'catalog', child: ListTile(leading: Icon(Icons.storefront_rounded), title: Text('Browse products'), contentPadding: EdgeInsets.zero)),
+          CheckedPopupMenuItem(value: 'shopOrder', checked: shopOrder, child: const Text('Sort by shop section')),
+          if (bought.isNotEmpty)
+            const PopupMenuItem(value: 'shopAgain', child: ListTile(leading: Icon(Icons.replay), title: Text('Shop again'), contentPadding: EdgeInsets.zero)),
+          if (bought.isNotEmpty)
+            const PopupMenuItem(value: 'clearBought', child: ListTile(leading: Icon(Icons.playlist_remove), title: Text('Clear bought'), contentPadding: EdgeInsets.zero)),
+          if (items.isNotEmpty)
+            const PopupMenuItem(value: 'clearAll', child: ListTile(leading: Icon(Icons.delete_sweep_outlined, color: Colors.red), title: Text('Clear whole list'), contentPadding: EdgeInsets.zero)),
+        ],
+      ),
+    ];
   }
 
   Widget _buildInput() {
@@ -440,24 +433,35 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
         );
 
     final muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6);
-    final shown = _boughtTab ? bought : toBuy;
+    var shown = _boughtTab ? bought : toBuy;
+    if (!_boughtTab && ref.watch(groceryShopOrderProvider)) {
+      final position = {for (var i = 0; i < toBuy.length; i++) toBuy[i].id: i};
+      shown = [...toBuy]..sort((a, b) {
+          final byShop = groceryCategoryRank(a.category).compareTo(groceryCategoryRank(b.category));
+          return byShop != 0 ? byShop : position[a.id]!.compareTo(position[b.id]!);
+        });
+    }
 
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
-          child: SizedBox(
-            width: double.infinity,
-            child: SegmentedButton<bool>(
-              showSelectedIcon: false,
-              style: const ButtonStyle(visualDensity: VisualDensity.compact),
-              segments: [
-                ButtonSegment(value: false, label: Text('To buy (${toBuy.length})')),
-                ButtonSegment(value: true, label: Text('Bought (${bought.length})')),
-              ],
-              selected: {_boughtTab},
-              onSelectionChanged: (v) => setState(() => _boughtTab = v.first),
-            ),
+          padding: const EdgeInsets.fromLTRB(12, 2, 0, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: SegmentedButton<bool>(
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                  segments: [
+                    ButtonSegment(value: false, label: Text('To buy (${toBuy.length})')),
+                    ButtonSegment(value: true, label: Text('Bought (${bought.length})')),
+                  ],
+                  selected: {_boughtTab},
+                  onSelectionChanged: (v) => setState(() => _boughtTab = v.first),
+                ),
+              ),
+              ..._listActions(items, bought),
+            ],
           ),
         ),
         if (_boughtTab && bought.isNotEmpty)
@@ -494,16 +498,28 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
 class _SectionHeader extends StatelessWidget {
   final String title;
   final int count;
-  const _SectionHeader({required this.title, required this.count});
+  final bool? expanded; // null = not foldable
+  final VoidCallback? onTap;
+  const _SectionHeader({required this.title, required this.count, this.expanded, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final color = Theme.of(context).colorScheme.primary;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
-      child: Text(
-        '${title.toUpperCase()}  ·  $count',
-        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.8, color: color),
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(16, expanded == null ? 14 : 12, 14, expanded == null ? 4 : 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '${title.toUpperCase()}  ·  $count',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.8, color: color),
+              ),
+            ),
+            if (expanded != null) Icon(expanded! ? Icons.expand_less : Icons.expand_more, size: 20, color: color),
+          ],
+        ),
       ),
     );
   }
@@ -547,7 +563,7 @@ class _GroceryRow extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: radius, side: BorderSide(color: selected ? scheme.primary : border)),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: onToggle,
+        onTap: selecting ? onToggle : onEdit,
         onLongPress: onLongPress,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
@@ -618,18 +634,26 @@ class _GroceryRow extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(width: 10),
-                // Tick on the right: outlined grey while to buy, filled green once bought.
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: done ? _green : Colors.transparent,
-                    border: Border.all(color: done ? _green : muted, width: 1.6),
+                const SizedBox(width: 2),
+                // Tick on the right (the only control that marks bought):
+                // outlined grey while to buy, filled green once bought.
+                InkResponse(
+                  onTap: onToggle,
+                  radius: 24,
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      width: 24,
+                      height: 24,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: done ? _green : Colors.transparent,
+                        border: Border.all(color: done ? _green : muted, width: 1.6),
+                      ),
+                      child: Icon(Icons.check, size: 15, color: done ? Colors.white : muted),
+                    ),
                   ),
-                  child: Icon(Icons.check, size: 15, color: done ? Colors.white : muted),
                 ),
               ],
             ],
@@ -811,7 +835,7 @@ Future<({String quantity, bool saveToCatalog})?> askGroceryQuantity(
                   border: OutlineInputBorder(),
                 ),
               ),
-              QuantitySuggestionChips(controller: controller, category: category),
+              QuantitySuggestionChips(controller: controller, category: category, onPicked: submit),
               if (offerSave) ...[
                 const SizedBox(height: 8),
                 CheckboxListTile(
@@ -935,9 +959,7 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
 // ── Catalog browser ─────────────────────────────────────────────────────────
 
 class GroceryMasterListView extends ConsumerStatefulWidget {
-  /// [manage] (opened from the ⋮ menu) adds Edit / Delete on each product and Reset.
-  final bool manage;
-  const GroceryMasterListView({super.key, this.manage = false});
+  const GroceryMasterListView({super.key});
 
   @override
   ConsumerState<GroceryMasterListView> createState() => _GroceryMasterListViewState();
@@ -946,6 +968,7 @@ class GroceryMasterListView extends ConsumerStatefulWidget {
 class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
   final _searchController = TextEditingController();
   String? _category;
+  final Set<String> _openCategories = {'Vegetables'};
 
   @override
   void dispose() {
@@ -1107,11 +1130,29 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
     }
     final categories = kGroceryCategoryOrder.where((c) => catalog.any((i) => i.category == c)).toList();
 
+    // Rows to show: a String is a category heading, a CatalogItem is a product.
+    final foldable = query.isEmpty && _category == null;
+    final counts = <String, int>{};
+    for (final i in catalog) {
+      counts[i.category] = (counts[i.category] ?? 0) + 1;
+    }
+    final rows = <Object>[];
+    if (foldable) {
+      String? previous;
+      for (final item in items) {
+        if (item.category != previous) rows.add(item.category);
+        previous = item.category;
+        if (_openCategories.contains(item.category)) rows.add(item);
+      }
+    } else {
+      if (query.isEmpty && _category != null) rows.add(_category!);
+      rows.addAll(items);
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Row(children: [Icon(Icons.storefront_rounded), SizedBox(width: 10), Text('Browse products')]),
         actions: [
-          if (widget.manage)
           PopupMenuButton<String>(
             tooltip: 'More',
             onSelected: (v) {
@@ -1190,7 +1231,7 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
                       const SizedBox(height: 8),
                       OutlinedButton.icon(
                         icon: const Icon(Icons.add),
-                        label: const Text('Add it to the catalog'),
+                        label: const Text('Add it as a new product'),
                         onPressed: _showAddItemDialog,
                       ),
                     ],
@@ -1199,22 +1240,29 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
               : ListView.builder(
                   // Keep the last rows above the phone's nav buttons and the New item button.
                   padding: const EdgeInsets.only(bottom: 88),
-                  itemCount: items.length,
+                  itemCount: rows.length,
                   itemBuilder: (context, index) {
-                    final item = items[index];
+                    final row = rows[index];
+                    if (row is String) {
+                      return _SectionHeader(
+                        title: row,
+                        count: counts[row] ?? 0,
+                        expanded: foldable ? _openCategories.contains(row) : null,
+                        onTap: foldable
+                            ? () => setState(() {
+                                  if (!_openCategories.remove(row)) _openCategories.add(row);
+                                })
+                            : null,
+                      );
+                    }
+                    final item = row as CatalogItem;
                     final existing = onList[item.name.toLowerCase()];
-                    final showHeader = query.isEmpty && (index == 0 || items[index - 1].category != item.category);
-                    final tile = _SuggestionTile(
+                    return _SuggestionTile(
                       item: item,
                       existing: existing,
                       onTap: () => _add(item),
                       onRemove: (id) => ref.read(groceryProvider.notifier).deleteMultiple({id}),
-                      onMenu: !widget.manage ? null : (action) => action == 'edit' ? _showItemDialog(edit: item) : _deleteProduct(item),
-                    );
-                    if (!showHeader) return tile;
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [_SectionHeader(title: item.category, count: catalog.where((i) => i.category == item.category).length), tile],
+                      onMenu: (action) => action == 'edit' ? _showItemDialog(edit: item) : _deleteProduct(item),
                     );
                   },
                 )),
@@ -1249,8 +1297,9 @@ void showGroceryToast(
 class QuantitySuggestionChips extends StatelessWidget {
   final TextEditingController controller;
   final String category;
+  final VoidCallback? onPicked; // runs after a chip fills the box
 
-  const QuantitySuggestionChips({super.key, required this.controller, this.category = ''});
+  const QuantitySuggestionChips({super.key, required this.controller, this.category = '', this.onPicked});
 
   @override
   Widget build(BuildContext context) {
@@ -1275,10 +1324,13 @@ class QuantitySuggestionChips extends StatelessWidget {
                   visualDensity: VisualDensity.compact,
                   backgroundColor: scheme.primary.withValues(alpha: 0.10),
                   side: BorderSide.none,
-                  onPressed: () => controller.value = TextEditingValue(
-                    text: o,
-                    selection: TextSelection.collapsed(offset: o.length),
-                  ),
+                  onPressed: () {
+                    controller.value = TextEditingValue(
+                      text: o,
+                      selection: TextSelection.collapsed(offset: o.length),
+                    );
+                    onPicked?.call();
+                  },
                 ),
             ],
           ),

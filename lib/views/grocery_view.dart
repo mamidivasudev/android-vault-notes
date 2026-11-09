@@ -25,7 +25,7 @@ class GroceryView extends ConsumerStatefulWidget {
 class _GroceryViewState extends ConsumerState<GroceryView> {
   final _input = TextEditingController();
   final _focus = FocusNode();
-  bool _showBought = true;
+  bool _boughtTab = false; // false = To buy, true = Bought
 
   @override
   void initState() {
@@ -439,39 +439,53 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
           onDelete: () => deleteGroceryWithUndo(context, ref, {item.id}, confirm: false),
         );
 
-    return ListView(
-      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      padding: const EdgeInsets.only(bottom: 32),
+    final muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6);
+    final shown = _boughtTab ? bought : toBuy;
+
+    return Column(
       children: [
-        if (toBuy.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 20),
-            child: Center(
-              child: Text('Everything is bought ✓', style: TextStyle(color: _green.withValues(alpha: 0.9), fontWeight: FontWeight.w600)),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
+          child: SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<bool>(
+              showSelectedIcon: false,
+              style: const ButtonStyle(visualDensity: VisualDensity.compact),
+              segments: [
+                ButtonSegment(value: false, label: Text('To buy (${toBuy.length})')),
+                ButtonSegment(value: true, label: Text('Bought (${bought.length})')),
+              ],
+              selected: {_boughtTab},
+              onSelectionChanged: (v) => setState(() => _boughtTab = v.first),
             ),
           ),
-        // One plain list in the order items were added (no category headings).
-        for (final item in toBuy) row(item),
-        if (bought.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          InkWell(
-            onTap: () => setState(() => _showBought = !_showBought),
+        ),
+        if (_boughtTab && bought.isNotEmpty)
+          Align(
+            alignment: Alignment.centerRight,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 8, 6),
-              child: Row(
-                children: [
-                  Icon(_showBought ? Icons.expand_less : Icons.expand_more, size: 20),
-                  const SizedBox(width: 6),
-                  Text('Bought (${bought.length})', style: const TextStyle(fontWeight: FontWeight.w700)),
-                  const Spacer(),
-                  TextButton(onPressed: () => _clearBought(items), child: const Text('Clear')),
-                ],
+              padding: const EdgeInsets.only(right: 8),
+              child: TextButton(
+                style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                onPressed: () => _clearBought(items),
+                child: const Text('Clear'),
               ),
             ),
           ),
-          if (_showBought)
-            for (final item in bought) row(item),
-        ],
+        Expanded(
+          child: shown.isEmpty
+              ? Center(
+                  child: Text(
+                    _boughtTab ? 'Nothing bought yet' : 'Everything is bought ✓',
+                    style: TextStyle(color: _boughtTab ? muted : _green, fontWeight: FontWeight.w600),
+                  ),
+                )
+              : ListView(
+                  keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: const EdgeInsets.only(bottom: 32),
+                  children: [for (final item in shown) row(item)],
+                ),
+        ),
       ],
     );
   }

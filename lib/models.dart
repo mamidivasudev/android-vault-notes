@@ -783,6 +783,7 @@ class GroceryItem {
   final String category; // catalog category, e.g. "Vegetables"; empty = Other
   final String localName; // Telugu/Hindi name from the catalog, for display
   final DateTime? purchasedAt;
+  final double? price; // what was paid; only set on bought items
 
   GroceryItem({
     String? id,
@@ -794,6 +795,7 @@ class GroceryItem {
     this.category = '',
     this.localName = '',
     this.purchasedAt,
+    this.price,
   })  : id = id ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now();
 
@@ -810,6 +812,7 @@ class GroceryItem {
         'category': category,
         if (localName.isNotEmpty) 'localName': localName,
         if (purchasedAt != null) 'purchasedAt': purchasedAt!.toIso8601String(),
+        if (price != null) 'price': price,
       };
 
   factory GroceryItem.fromJson(Map<String, dynamic> json) {
@@ -834,6 +837,7 @@ class GroceryItem {
       category: json['category']?.toString() ?? '',
       localName: json['localName']?.toString() ?? '',
       purchasedAt: DateTime.tryParse(json['purchasedAt']?.toString() ?? ''),
+      price: double.tryParse(json['price']?.toString() ?? ''),
     );
   }
 
@@ -845,6 +849,7 @@ class GroceryItem {
     String? category,
     String? localName,
     Object? purchasedAt = _sentinel,
+    Object? price = _sentinel,
   }) {
     return GroceryItem(
       id: id,
@@ -856,6 +861,7 @@ class GroceryItem {
       category: category ?? this.category,
       localName: localName ?? this.localName,
       purchasedAt: purchasedAt == _sentinel ? this.purchasedAt : purchasedAt as DateTime?,
+      price: price == _sentinel ? this.price : price as double?,
     );
   }
 }

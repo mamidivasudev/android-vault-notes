@@ -28,6 +28,9 @@ class GroceryView extends ConsumerStatefulWidget {
 
 const _flyDuration = Duration(milliseconds: 320);
 
+/// "₹1,250" or "₹49.50".
+String groceryRupees(double amount) => '₹${NumberFormat('#,##0.##').format(amount)}';
+
 /// The list as a neat plain-text document, to-buy items first.
 String groceryListText(List<GroceryItem> items, DateTime when) {
   const width = 36;
@@ -45,12 +48,22 @@ String groceryListText(List<GroceryItem> items, DateTime when) {
       ..writeln(line);
     for (final i in list) {
       final name = '$mark ${i.name}';
-      out.writeln(i.quantityLabel.isEmpty ? name : '${name.padRight(width - 10)}  ${i.quantityLabel}');
+      final details = [
+        if (i.quantityLabel.isNotEmpty) i.quantityLabel,
+        if (i.price != null) groceryRupees(i.price!),
+      ].join('  ');
+      out.writeln(details.isEmpty ? name : '${name.padRight(width - 10)}  $details');
     }
   }
 
   section('TO BUY', '[ ]', items.where((i) => !i.isPurchased).toList());
-  section('BOUGHT', '[x]', items.where((i) => i.isPurchased).toList());
+  final bought = items.where((i) => i.isPurchased).toList();
+  section('BOUGHT', '[x]', bought);
+  if (bought.any((i) => i.price != null)) {
+    out
+      ..writeln(line)
+      ..writeln('TOTAL: ${groceryRupees(bought.fold<double>(0, (sum, i) => sum + (i.price ?? 0)))}');
+  }
   return out.toString();
 }
 
@@ -60,6 +73,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
   bool _boughtTab = false; // false = To buy, true = Bought
   final _pages = PageController(keepPage: false);
   final Set<String> _flying = {}; // cards sliding over to the other tab
+  bool _askingPrice = false;
 
   @override
   void initState() {
@@ -239,13 +253,6 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       case 'share':
         _share(items);
         break;
-      case 'shopAgain':
-        _confirm('Shop again?', 'Move every bought item back to the list?',
-            () async {
-          await ref.read(groceryProvider.notifier).uncheckAll();
-          if (mounted) showGroceryToast(context, 'All items back on the list', icon: Icons.replay, color: _infoBlue);
-        });
-        break;
       case 'clearBought':
         _clearBought(items);
         break;
@@ -315,8 +322,6 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
           const PopupMenuItem(value: 'catalog', child: ListTile(leading: Icon(Icons.storefront_rounded), title: Text('Browse products'), contentPadding: EdgeInsets.zero)),
           const PopupMenuItem(value: 'share', child: ListTile(leading: Icon(Icons.share_outlined), title: Text('Share list'), contentPadding: EdgeInsets.zero)),
           const PopupMenuItem(value: 'saveTxt', child: ListTile(leading: Icon(Icons.save_alt), title: Text('Save list'), contentPadding: EdgeInsets.zero)),
-          if (bought.isNotEmpty)
-            const PopupMenuItem(value: 'shopAgain', child: ListTile(leading: Icon(Icons.replay), title: Text('Shop again'), contentPadding: EdgeInsets.zero)),
           if (bought.isNotEmpty)
             const PopupMenuItem(value: 'clearBought', child: ListTile(leading: Icon(Icons.playlist_remove), title: Text('Clear bought'), contentPadding: EdgeInsets.zero)),
           if (items.isNotEmpty)
@@ -471,18 +476,35 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
             if (selecting) {
               ref.read(selectedGroceryProvider.notifier).toggle(item.id);
             } else {
-              if (!_flying.add(item.id)) return; // already on its way
+              if (_flying.contains(item.id) || _askingPrice) return; // already on its way
+              double? price;
+              if (!item.isPurchased) {
+                _askingPrice = true;
+                price = await askGroceryPrice(context, item.name);
+                _askingPrice = false;
+                if (!mounted) return;
+              } else {
+                _askingPrice = true;
+                final ok = await confirmYesNo(
+                  context,
+                  'Move to To buy?',
+                  'Move ${item.name} back to To buy?${item.price != null ? ' Its price will be removed.' : ''}',
+                );
+                _askingPrice = false;
+                if (!ok || !mounted) return;
+              }
+              _flying.add(item.id);
               HapticFeedback.lightImpact();
               setState(() {});
               final notifier = ref.read(groceryProvider.notifier);
               // Let the card slide away first, then move it to the other list.
               Future.delayed(_flyDuration, () async {
-                await notifier.toggleItem(item.id);
+                await notifier.toggleItem(item.id, price: price);
                 if (mounted) setState(() => _flying.remove(item.id));
               });
               item.isPurchased
                   ? showGroceryToast(context, '${item.name} back on the list', icon: Icons.undo, color: _infoBlue)
-                  : showGroceryToast(context, '${item.name} bought');
+                  : showGroceryToast(context, price == null ? '${item.name} bought' : '${item.name} bought · ${groceryRupees(price)}');
             }
           },
           onLongPress: () {
@@ -505,26 +527,54 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
           );
 
     // A page with its Clear button, which turns on the tick boxes.
-    Widget withClear(List<GroceryItem> list, bool boughtPage, String emptyText, Color emptyColor) => Column(
+    Widget withClear(List<GroceryItem> list, bool boughtPage, String emptyText, Color emptyColor) {
+      final showTotal = boughtPage && list.any((i) => i.price != null);
+      final total = list.fold<double>(0, (sum, i) => sum + (i.price ?? 0));
+      return Column(
           children: [
             if (list.isNotEmpty && !selecting)
-              Align(
-                alignment: Alignment.centerRight,
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: TextButton(
-                    style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
-                    onPressed: () {
-                      ref.read(grocerySelectBoughtProvider.notifier).set(boughtPage);
-                      ref.read(isSelectionModeProvider.notifier).setState(true);
-                    },
-                    child: const Text('Clear'),
-                  ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Row(
+                  children: [
+                    if (boughtPage)
+                      TextButton(
+                        style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                        onPressed: () => _confirm(
+                          'Shop again?',
+                          'Move all ${list.length} bought item${list.length == 1 ? '' : 's'} back to To buy?${showTotal ? ' Their prices will be removed.' : ''}',
+                          () async {
+                            await ref.read(groceryProvider.notifier).uncheckAll();
+                            if (mounted) showGroceryToast(context, 'All items moved to To buy', icon: Icons.replay, color: _infoBlue);
+                          },
+                        ),
+                        child: const Text('Shop again'),
+                      ),
+                    const Spacer(),
+                    TextButton(
+                      style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                      onPressed: () {
+                        ref.read(grocerySelectBoughtProvider.notifier).set(boughtPage);
+                        ref.read(isSelectionModeProvider.notifier).setState(true);
+                      },
+                      child: const Text('Clear'),
+                    ),
+                  ],
+                ),
+              ),
+            if (boughtPage && list.isNotEmpty) const Divider(height: 1, indent: 12, endIndent: 12),
+            if (showTotal)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Total ${groceryRupees(total)}', style: const TextStyle(color: _green, fontSize: 15, fontWeight: FontWeight.w800)),
                 ),
               ),
             Expanded(child: page(list, emptyText, emptyColor)),
           ],
         );
+    }
 
     return Column(
       children: [
@@ -746,6 +796,10 @@ class _GroceryRow extends StatelessWidget {
                   ],
                 ),
               ),
+              if (item.price != null) ...[
+                const SizedBox(width: 8),
+                Text(groceryRupees(item.price!), style: const TextStyle(color: _green, fontSize: 14, fontWeight: FontWeight.w800)),
+              ],
               if (!selecting) ...[
                 const SizedBox(width: 8),
                 InkWell(
@@ -919,6 +973,37 @@ class _SuggestionTile extends StatelessWidget {
   }
 }
 
+// ── Price dialog ────────────────────────────────────────────────────────────
+
+/// Asks what was paid, with the number keypad. Cancel (or an empty box)
+/// returns null: the item is still bought, just without a price.
+Future<double?> askGroceryPrice(BuildContext context, String name) {
+  final controller = TextEditingController();
+  return showDialog<double>(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogContext) {
+      void submit() => Navigator.pop(dialogContext, double.tryParse(controller.text.trim()));
+      return AlertDialog(
+        title: Text(name),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))],
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => submit(),
+          decoration: const InputDecoration(labelText: 'Enter price', prefixText: '₹ ', border: OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+          FilledButton(onPressed: submit, child: const Text('Save')),
+        ],
+      );
+    },
+  );
+}
+
 // ── Quantity dialog ─────────────────────────────────────────────────────────
 
 /// Small "how much?" box shown when an item is picked. The quantity is free
@@ -1016,11 +1101,15 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
   late final TextEditingController _name = TextEditingController(text: widget.item.name);
   // Quantity is one free-text box ("1 kg", "2 packets"); old quantity + unit are joined.
   late final TextEditingController _qty = TextEditingController(text: widget.item.quantityLabel);
+  late final TextEditingController _price = TextEditingController(
+    text: widget.item.price == null ? '' : NumberFormat('0.##').format(widget.item.price),
+  );
 
   @override
   void dispose() {
     _name.dispose();
     _qty.dispose();
+    _price.dispose();
     super.dispose();
   }
 
@@ -1031,6 +1120,7 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
           name: name,
           quantity: _qty.text.trim(),
           unit: '',
+          price: widget.item.isPurchased ? double.tryParse(_price.text.trim()) : null,
         ));
     if (!mounted) return;
     showGroceryToast(context, '$name updated', icon: Icons.edit, color: _infoBlue);
@@ -1069,6 +1159,15 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
             ),
           ),
           QuantitySuggestionChips(controller: _qty, category: widget.item.category),
+          if (widget.item.isPurchased) ...[
+            const SizedBox(height: 14),
+            TextField(
+              controller: _price,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))],
+              decoration: const InputDecoration(labelText: 'Price (optional)', prefixText: '₹ ', border: OutlineInputBorder()),
+            ),
+          ],
           const SizedBox(height: 16),
           Row(
             children: [
@@ -1103,6 +1202,27 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
   final _searchController = TextEditingController();
   String? _category;
   final Set<String> _openCategories = {'Vegetables'};
+  final Map<String, GlobalKey> _chipKeys = {};
+
+  /// Picks a category (null = All) and brings its chip into view.
+  void _selectCategory(String? category) {
+    setState(() => _category = category);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final chip = _chipKeys[category ?? '']?.currentContext;
+      if (chip != null && chip.mounted) {
+        Scrollable.ensureVisible(chip, alignment: 0.5, duration: const Duration(milliseconds: 220));
+      }
+    });
+  }
+
+  /// Swipe left = next category, swipe right = previous one.
+  void _swipeCategory(DragEndDetails details, List<String> categories) {
+    final speed = details.primaryVelocity ?? 0;
+    if (speed.abs() < 200) return;
+    final order = <String?>[null, ...categories];
+    final next = order.indexOf(_category) + (speed < 0 ? 1 : -1);
+    if (next >= 0 && next < order.length) _selectCategory(order[next]);
+  }
 
   @override
   void dispose() {
@@ -1288,12 +1408,10 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
         automaticallyImplyLeading: false,
         title: const Row(children: [Icon(Icons.storefront_rounded), SizedBox(width: 10), Text('Browse products')]),
         actions: [
-          IconButton(
-            tooltip: 'Close',
-            iconSize: 20,
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.close),
+          TextButton(
+            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
             onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
           ),
           PopupMenuButton<String>(
             tooltip: 'More',
@@ -1342,16 +1460,18 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   children: [
                     Padding(
+                      key: _chipKeys.putIfAbsent('', GlobalKey.new),
                       padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(label: const Text('All'), selected: _category == null, onSelected: (_) => setState(() => _category = null)),
+                      child: ChoiceChip(label: const Text('All'), selected: _category == null, onSelected: (_) => _selectCategory(null)),
                     ),
                     for (final c in categories)
                       Padding(
+                        key: _chipKeys.putIfAbsent(c, GlobalKey.new),
                         padding: const EdgeInsets.only(right: 6),
                         child: ChoiceChip(
                           label: Text(c),
                           selected: _category == c,
-                          onSelected: (v) => setState(() => _category = v ? c : null),
+                          onSelected: (v) => _selectCategory(v ? c : null),
                         ),
                       ),
                   ],
@@ -1362,7 +1482,10 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
         ),
       ),
       // Stop the list above the phone's nav buttons.
-      body: SafeArea(top: false, child: loading && catalog.isEmpty
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragEnd: (d) => _swipeCategory(d, categories),
+        child: SafeArea(top: false, child: loading && catalog.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : items.isEmpty
               ? Center(
@@ -1380,6 +1503,7 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
                   ),
                 )
               : ListView.builder(
+                  key: ValueKey(_category ?? 'all'), // each category starts at the top
                   // Keep the last rows above the phone's nav buttons and the New item button.
                   padding: const EdgeInsets.only(bottom: 88),
                   itemCount: rows.length,
@@ -1407,7 +1531,7 @@ class _GroceryMasterListViewState extends ConsumerState<GroceryMasterListView> {
                       onMenu: (action) => action == 'edit' ? _showItemDialog(edit: item) : _deleteProduct(item),
                     );
                   },
-                )),
+                ))),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddItemDialog,
         icon: const Icon(Icons.add),

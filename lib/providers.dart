@@ -2422,6 +2422,7 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
         existing.copyWith(
           isPurchased: false,
           purchasedAt: null,
+          price: null,
           quantity: quantity.isNotEmpty ? quantity : null,
           unit: unit.isNotEmpty ? unit : null,
         ),
@@ -2446,7 +2447,7 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
     await _saveItems();
   }
 
-  Future<void> toggleItem(String id) async {
+  Future<void> toggleItem(String id, {double? price}) async {
     await _initFuture;
     GroceryItem? bought;
     state = [
@@ -2456,6 +2457,7 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
             final next = item.copyWith(
               isPurchased: !item.isPurchased,
               purchasedAt: item.isPurchased ? null : DateTime.now(),
+              price: item.isPurchased ? null : price,
             );
             if (next.isPurchased) bought = next;
             return next;
@@ -2493,7 +2495,7 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
   /// "Shop again": every bought item goes back to the to-buy list.
   Future<void> uncheckAll() async {
     await _initFuture;
-    state = [for (final i in state) i.isPurchased ? i.copyWith(isPurchased: false, purchasedAt: null) : i];
+    state = [for (final i in state) i.isPurchased ? i.copyWith(isPurchased: false, purchasedAt: null, price: null) : i];
     await _saveItems();
   }
 

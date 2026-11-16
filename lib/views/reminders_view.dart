@@ -302,7 +302,7 @@ class _RemindersViewState extends ConsumerState<RemindersView> {
                             context: context,
                             builder: (context) => AlertDialog(
                               title: const Text('Description'),
-                              content: Text(reminder.description),
+                              content: SelectableText(reminder.description), // part can be copied
                               actions: [
                                 TextButton(
                                   onPressed: () => Navigator.pop(context),

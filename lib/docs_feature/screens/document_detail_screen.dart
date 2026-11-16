@@ -401,7 +401,8 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                             ],
                           ),
                           const SizedBox(height: 8),
-                          Text(
+                          // Selectable so part of the notes can be copied.
+                          SelectableText(
                             document.notes,
                             style: GoogleFonts.inter(color: Colors.white, fontSize: 14, height: 1.4),
                           ),

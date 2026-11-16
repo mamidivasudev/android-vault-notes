@@ -287,7 +287,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       ..sort((a, b) => (b.purchasedAt ?? b.createdAt).compareTo(a.purchasedAt ?? a.createdAt));
     final typing = _input.text.trim().isNotEmpty;
     final selecting = ref.watch(selectedGroceryProvider).isNotEmpty || ref.watch(isSelectionModeProvider);
-    final showAdd = !typing && !_focus.hasFocus && !selecting;
+    final showAdd = !selecting; // always there, except while ticking items
 
     return Stack(
       children: [

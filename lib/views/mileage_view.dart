@@ -362,7 +362,7 @@ class _MileageViewState extends ConsumerState<MileageView> {
     // The newest service by date (the list may be in any order).
     final latest = services.reduce((a, b) => _parseDate(b.date).isAfter(_parseDate(a.date)) ? b : a);
     return services.map((s) {
-      final since = identical(s, latest) ? _timeSince(_parseDate(s.date)) : null;
+      final since = identical(s, latest) ? _timeSince(_parseDate(s.date), join: ' - ') : null;
       return Container(
         margin: const EdgeInsets.only(bottom: 8, left: 16, right: 16),
         decoration: BoxDecoration(
@@ -381,7 +381,7 @@ class _MileageViewState extends ConsumerState<MileageView> {
               if (since != null) ...[
                 const SizedBox(height: 4),
                 Text(
-                  since == '0 days' ? 'Serviced today' : '$since ago',
+                  since,
                   style: const TextStyle(color: Color(0xFF2DD4BF), fontWeight: FontWeight.w600),
                 ),
               ],

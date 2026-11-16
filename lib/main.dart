@@ -13,6 +13,10 @@ import 'models.dart';
 import 'providers.dart';
 import 'notification_service.dart';
 import 'views/notes_view.dart';
+import 'extras/medicines_view.dart';
+import 'extras/money_view.dart';
+import 'extras/dates_view.dart';
+import 'extras/journal_view.dart';
 import 'views/expenses_view.dart';
 import 'views/links_view.dart';
 import 'views/tables_view.dart';
@@ -102,6 +106,11 @@ const allTabs = [
   AppTab('docs', 'Docs', Icons.folder_outlined, Icons.folder, 8),
   AppTab('mileage', 'Mileage', Icons.two_wheeler_outlined, Icons.two_wheeler, 9),
   AppTab('grocery', 'Grocery', Icons.shopping_cart_outlined, Icons.shopping_cart, 10),
+  // Optional tabs, off until switched on in tab settings.
+  AppTab('medicines', 'Medicines', Icons.medication_outlined, Icons.medication, 11),
+  AppTab('money', 'Money', Icons.currency_rupee_outlined, Icons.currency_rupee, 12),
+  AppTab('dates', 'Dates', Icons.cake_outlined, Icons.cake, 13),
+  AppTab('journal', 'Journal', Icons.menu_book_outlined, Icons.menu_book, 14),
 ];
 
 class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStateMixin {
@@ -581,7 +590,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                   );
                 },
               ),
-        floatingActionButton: isSelectionMode || isEditingTable || _currentIndex == 4 || _currentIndex == 8 || _currentIndex == 9 || _currentIndex == 10
+        floatingActionButton: isSelectionMode || isEditingTable || _currentIndex == 4 || _currentIndex == 8 || _currentIndex == 9 || _currentIndex >= 10
             ? null 
             : FloatingActionButton(
                 onPressed: _handleFabPress,
@@ -1924,7 +1933,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
             )
           : RichText(
               text: TextSpan(
-                 text: _currentIndex == 1 ? 'My Expenses' : (_currentIndex == 2 ? 'My Links' : (_currentIndex == 3 ? 'My Tables' : (_currentIndex == 4 ? 'Recycle Bin' : (_currentIndex == 5 ? 'Reminders' : (_currentIndex == 7 ? 'Bills & Subscriptions' : (_currentIndex == 10 ? ' Grocery' : 'My Notes')))))),
+                 text: _currentIndex == 1 ? 'My Expenses' : (_currentIndex == 2 ? 'My Links' : (_currentIndex == 3 ? 'My Tables' : (_currentIndex == 4 ? 'Recycle Bin' : (_currentIndex == 5 ? 'Reminders' : (_currentIndex == 7 ? 'Bills & Subscriptions' : (_currentIndex == 10 ? ' Grocery' : (const {11: 'Medicines', 12: 'Money lent / borrowed', 13: 'Important dates', 14: 'Journal'}[_currentIndex] ?? 'My Notes'))))))),
                 style: GoogleFonts.lexend(fontSize: 18, fontWeight: FontWeight.bold, color: const Color(0xFF1D63D2)),
                 children: [
                   if (_currentIndex == 0) ...[
@@ -2118,6 +2127,10 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     if (_currentIndex == 8) return const DocsHomeScreen();
     if (_currentIndex == 9) return MileageView(onGlobalSync: _exportData);
     if (_currentIndex == 10) return const GroceryView();
+    if (_currentIndex == 11) return const MedicinesView();
+    if (_currentIndex == 12) return const MoneyView();
+    if (_currentIndex == 13) return const ImportantDatesView();
+    if (_currentIndex == 14) return const JournalView();
     return IndexedStack(index: _currentIndex, children: const [NotesView(), ExpensesView(), LinksView(), TablesView()]);
   }
 

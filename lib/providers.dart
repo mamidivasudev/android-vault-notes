@@ -12,6 +12,7 @@ import 'dart:convert';
 import 'docs_feature/services/google_drive_service.dart' as docs_drive;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'notification_service.dart';
+import 'extras/extras_store.dart';
 import 'docs_feature/providers/document_provider.dart';
 
 final vaultServiceProvider = Provider((ref) => VaultService());
@@ -378,7 +379,9 @@ class EnabledTabsNotifier extends Notifier<List<String>> {
       newState.remove(tabId);
     }
     // Keep order
-    final ordered = ['notes', 'expenses', 'links', 'tables', 'bills', 'docs', 'mileage', 'grocery'].where((t) => newState.contains(t)).toList();
+    final ordered = ['notes', 'expenses', 'links', 'tables', 'bills', 'docs', 'mileage', 'grocery', 'medicines', 'money', 'dates', 'journal']
+        .where((t) => newState.contains(t))
+        .toList();
     state = ordered;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_key, ordered);
@@ -1867,6 +1870,10 @@ class SyncNotifier extends Notifier<SyncStatus> {
       ref.invalidate(groceryHistoryProvider);
       ref.invalidate(groceryCatalogProvider);
       ref.invalidate(enabledTabsProvider);
+      ref.invalidate(medicinesProvider);
+      ref.invalidate(moneyProvider);
+      ref.invalidate(importantDatesProvider);
+      ref.invalidate(journalProvider);
       ref.invalidate(profilesProvider); // profiles_data.json was replaced too
 
       await rescheduleAllNotifications(vaultService);
@@ -1900,6 +1907,7 @@ final syncProvider = NotifierProvider<SyncNotifier, SyncStatus>(SyncNotifier.new
 /// Used after a Drive restore and once at app start (bill reminders are
 /// scheduled a couple of cycles ahead, so this keeps them topped up).
 Future<void> rescheduleAllNotifications(VaultService vaultService, {bool askPermission = true}) async {
+  await rescheduleExtrasAlerts(vaultService); // medicines, money due dates, birthdays
   try {
     final data = await vaultService.loadVaultData();
     for (final raw in (data['bills'] as List? ?? [])) {

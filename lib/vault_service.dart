@@ -25,6 +25,10 @@ class VaultService {
     'deleted_data.json',
     'profiles_data.json',
     'app_settings.json', // grocery list, budgets, docs categories, service odometer
+    'medicines_data.json',
+    'money_data.json',
+    'dates_data.json',
+    'journal_data.json',
   ];
 
   /// Folder (inside the vault) that holds automatic local snapshots.
@@ -479,6 +483,33 @@ class VaultService {
       final file = File('$path/monthly_reports.json');
       final data = {'monthlyReports': reports};
       await _atomicWrite(file, json.encode(data));
+    });
+  }
+
+  /// Reads the list stored under [key] in [fileName] (used by the optional
+  /// Medicines / Money / Dates / Journal tabs). A file that can't be read is
+  /// kept aside before it is next written.
+  Future<List<dynamic>> loadExtraList(String fileName, String key) async {
+    final path = await getVaultPath();
+    if (path == null) return [];
+    final file = File('$path/$fileName');
+    if (!await file.exists()) return [];
+    try {
+      final decoded = json.decode(await file.readAsString());
+      if (decoded is Map && decoded[key] is List) return List<dynamic>.from(decoded[key] as List);
+      if (decoded is Map && decoded[key] == null) return [];
+    } catch (e) {
+      print('Unreadable $fileName: $e');
+    }
+    markUnreadable(fileName);
+    return [];
+  }
+
+  Future<void> saveExtraList(String fileName, String key, List<dynamic> items) async {
+    await _synchronized(fileName, () async {
+      final path = await getVaultPath();
+      if (path == null) return;
+      await _atomicWrite(File('$path/$fileName'), json.encode({key: items, 'lastModified': DateTime.now().toIso8601String()}));
     });
   }
 

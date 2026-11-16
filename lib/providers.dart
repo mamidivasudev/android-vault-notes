@@ -114,6 +114,14 @@ abstract class _PersistedBoolNotifier extends Notifier<bool> {
   }
 }
 
+class DiaryLockNotifier extends _PersistedBoolNotifier {
+  @override
+  String get prefsKey => 'diary_locked';
+}
+
+/// Diary asks for the passcode / fingerprint before it opens.
+final diaryLockProvider = NotifierProvider<DiaryLockNotifier, bool>(DiaryLockNotifier.new);
+
 class NotesGridViewNotifier extends _PersistedBoolNotifier {
   @override
   String get prefsKey => 'notes_grid_view';

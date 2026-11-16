@@ -79,6 +79,7 @@ abstract class VaultListNotifier<T> extends Notifier<List<T>> {
 
 int _alertId(String key, int base, int slot) => (key.hashCode & 0x00FFFFFF) | ((base + slot) << 24);
 const _medicineBase = 64; // slots 0-15
+const _refillBase = 90;
 const _dateBase = 100; // +0 on the day, +1 the day before
 const _maxMedicineTimes = 16;
 
@@ -133,6 +134,26 @@ Future<void> scheduleMedicine(Medicine m) async {
       match: DateTimeComponents.time,
     );
   }
+}
+
+/// "💊 Dolo is running low — 5 left", shown right away.
+Future<void> notifyLowStock(Medicine m) async {
+  try {
+    await NotificationService().flutterLocalNotificationsPlugin.show(
+      _alertId(m.id, _refillBase, 0),
+      '💊 ${m.name} is running low',
+      '${m.stock} left — time to buy more',
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'daily_extras_channel',
+          'Medicines & dates',
+          importance: Importance.max,
+          priority: Priority.high,
+        ),
+      ),
+      payload: 'extra',
+    );
+  } catch (_) {}
 }
 
 Future<void> cancelMedicine(String id) async {
@@ -239,7 +260,10 @@ class MedicinesNotifier extends VaultListNotifier<Medicine> {
     };
     int? stock = m.stock;
     if (stock != null) stock = (stock + (wasTaken ? m.perDose : -m.perDose)).clamp(0, 1 << 30);
-    await save(m.copyWith(taken: taken, stock: stock));
+    final updated = m.copyWith(taken: taken, stock: stock);
+    await save(updated);
+    // Just dropped to the warning level: one refill notification.
+    if (!m.isLow && updated.isLow) await notifyLowStock(updated);
   }
 
   Future<void> delete(String id) async {

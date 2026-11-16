@@ -14,6 +14,8 @@ import 'providers.dart';
 import 'notification_service.dart';
 import 'views/notes_view.dart';
 import 'extras/medicines_view.dart';
+import 'extras/extras_models.dart' show JournalEntry;
+import 'extras/extras_store.dart';
 import 'widgets/scroll_nav_bar.dart';
 import 'extras/dates_view.dart';
 import 'extras/journal_view.dart';
@@ -1858,7 +1860,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
               controller: _searchController,
               autofocus: true,
               decoration: const InputDecoration(
-                hintText: 'Search Notes, Expenses, Links...',
+                hintText: 'Search notes, expenses, links, dates…',
                 border: InputBorder.none
               ),
               onChanged: (value) {
@@ -2079,7 +2081,17 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     final links = ref.read(linkItemsProvider).where((l) =>
         l.title.toLowerCase().contains(query) || l.url.toLowerCase().contains(query)).toList();
 
-    final totalResults = notes.length + expenses.length + links.length;
+    // New tabs: watched so results appear once their files have loaded.
+    final medicines = ref.watch(medicinesProvider).where((m) =>
+        m.name.toLowerCase().contains(query) || m.dose.toLowerCase().contains(query) || m.notes.toLowerCase().contains(query)).toList();
+    final dates = ref.watch(importantDatesProvider).where((d) =>
+        d.title.toLowerCase().contains(query) || d.notes.toLowerCase().contains(query) || d.type.toLowerCase().contains(query)).toList();
+    // A locked diary is not searched.
+    final diary = ref.watch(diaryLockProvider)
+        ? <JournalEntry>[]
+        : ref.watch(journalProvider).where((j) => j.text.toLowerCase().contains(query)).toList();
+
+    final totalResults = notes.length + expenses.length + links.length + medicines.length + dates.length + diary.length;
 
     if (totalResults == 0) {
       return Center(
@@ -2133,6 +2145,50 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
             subtitle: l.url,
             badge: 'LINK',
             onTap: () => setState(() { _isSearching = false; _currentIndex = 2; }),
+          )),
+          const SizedBox(height: 8),
+        ],
+        if (medicines.isNotEmpty) ...[
+          _globalSearchSection('Medicines', Icons.medication, const Color(0xFFEC4899)),
+          ...medicines.map((m) => _globalSearchTile(
+            icon: Icons.medication_outlined, color: const Color(0xFFEC4899),
+            title: m.name,
+            subtitle: [if (m.dose.isNotEmpty) m.dose, if (m.stock != null) '${m.stock} left'].join(' · '),
+            badge: 'MEDICINE',
+            onTap: () {
+              setState(() => _isSearching = false);
+              showMedicineEditor(context, ref, m);
+            },
+          )),
+          const SizedBox(height: 8),
+        ],
+        if (dates.isNotEmpty) ...[
+          _globalSearchSection('Dates', Icons.event, const Color(0xFF8B5CF6)),
+          ...dates.map((d) => _globalSearchTile(
+            icon: Icons.event_outlined, color: const Color(0xFF8B5CF6),
+            title: d.title,
+            subtitle: d.isHousehold
+                ? 'Since ${DateFormat('d MMM yyyy').format(d.startDate)}'
+                : '${d.type} · ${DateFormat('d MMMM').format(d.inYear(DateTime.now().year))}',
+            badge: 'DATE',
+            onTap: () {
+              setState(() => _isSearching = false);
+              showDateEditor(context, ref, d);
+            },
+          )),
+          const SizedBox(height: 8),
+        ],
+        if (diary.isNotEmpty) ...[
+          _globalSearchSection('Diary', Icons.menu_book, const Color(0xFF92400E)),
+          ...diary.map((j) => _globalSearchTile(
+            icon: Icons.menu_book_outlined, color: const Color(0xFF92400E),
+            title: DateFormat('EEE, d MMM yyyy').format(j.day),
+            subtitle: j.text.replaceAll('\n', ' '),
+            badge: 'DIARY',
+            onTap: () {
+              setState(() => _isSearching = false);
+              openJournalEntry(context, j);
+            },
           )),
           const SizedBox(height: 8),
         ],

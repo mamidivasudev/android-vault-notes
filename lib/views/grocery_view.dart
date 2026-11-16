@@ -99,6 +99,16 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
     super.dispose();
   }
 
+  /// Puts the cursor in the search box and always shows the keyboard, even
+  /// when the box is still selected after the keyboard was closed.
+  void _openSearch() {
+    if (_focus.hasFocus) {
+      SystemChannels.textInput.invokeMethod('TextInput.show');
+    } else {
+      _focus.requestFocus();
+    }
+  }
+
   // ── Adding ────────────────────────────────────────────────────────────────
 
   /// Quantity the user already typed ("tomato 1 kg" → "1 kg").
@@ -312,7 +322,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
               backgroundColor: const Color(0xFF1D63D2),
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              onPressed: () => _focus.requestFocus(),
+              onPressed: _openSearch,
               child: const Icon(Icons.add, size: 30),
             ),
           ),

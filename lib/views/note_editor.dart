@@ -442,6 +442,10 @@ class _NoteEditorState extends ConsumerState<NoteEditor> {
           text: _contentController.text.isEmpty ? ' ' : _contentController.text,
           style: style,
           linkStyle: const TextStyle(color: Color(0xFF1D63D2), decoration: TextDecoration.underline),
+          // SelectableLinkify has no Copy / Select all menu unless one is given,
+          // so selected text could not be copied while viewing a note.
+          contextMenuBuilder: (context, editableTextState) =>
+              AdaptiveTextSelectionToolbar.editableText(editableTextState: editableTextState),
         ),
       ),
     );

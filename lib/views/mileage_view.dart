@@ -359,7 +359,10 @@ class _MileageViewState extends ConsumerState<MileageView> {
         )
       ];
     }
+    // The newest service by date (the list may be in any order).
+    final latest = services.reduce((a, b) => _parseDate(b.date).isAfter(_parseDate(a.date)) ? b : a);
     return services.map((s) {
+      final since = identical(s, latest) ? _timeSince(_parseDate(s.date)) : null;
       return Container(
         margin: const EdgeInsets.only(bottom: 8, left: 16, right: 16),
         decoration: BoxDecoration(
@@ -375,6 +378,13 @@ class _MileageViewState extends ConsumerState<MileageView> {
             children: [
               const SizedBox(height: 4),
               Text('Service KM: ${s.odometer.toStringAsFixed(0)} km', style: const TextStyle(color: Colors.white70)),
+              if (since != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  since == '0 days' ? 'Serviced today' : '$since ago',
+                  style: const TextStyle(color: Color(0xFF2DD4BF), fontWeight: FontWeight.w600),
+                ),
+              ],
               if (s.comments != null && s.comments!.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Text(s.comments!, style: const TextStyle(fontStyle: FontStyle.italic, color: Colors.grey)),
@@ -443,33 +453,32 @@ class _MileageViewState extends ConsumerState<MileageView> {
     );
   }
 
+  /// Months and days from [from] until today, e.g. "2 months 5 days"
+  /// (null when [from] is in the future).
+  static String? _timeSince(DateTime from, {String join = ' '}) {
+    final now = DateTime.now();
+    final start = DateTime(from.year, from.month, from.day);
+    final today = DateTime(now.year, now.month, now.day);
+    if (start.isAfter(today)) return null;
+    var months = today.month - start.month + 12 * (today.year - start.year);
+    var days = today.day - start.day;
+    if (days < 0) {
+      months--;
+      days += DateTime(today.year, today.month, 0).day; // days in the previous month
+    }
+    final parts = [
+      if (months > 0) '$months month${months == 1 ? '' : 's'}',
+      if (days > 0) '$days day${days == 1 ? '' : 's'}',
+    ];
+    return parts.isEmpty ? '0 days' : parts.join(join);
+  }
+
   String _getBikeAgeString(List<FuelEntry> entries) {
     if (entries.isEmpty) return 'No data yet';
     // Entries are kept sorted by date, so the first one is the purchase/start date.
     final purchaseDate = DateTime.tryParse(entries.first.date) ?? DateTime.now();
-    final now = DateTime.now();
-    
-    int months = now.month - purchaseDate.month + (12 * (now.year - purchaseDate.year));
-    int days = now.day - purchaseDate.day;
+    final result = _timeSince(purchaseDate, join: ' - ') ?? '0 days';
 
-    if (days < 0) {
-      months--;
-      final previousMonth = DateTime(now.year, now.month, 0); 
-      days += previousMonth.day;
-    }
-    
-    String result = '';
-    if (months > 0) {
-      result += '$months month${months == 1 ? '' : 's'}';
-    }
-    if (days > 0) {
-      if (result.isNotEmpty) result += ' - ';
-      result += '$days day${days == 1 ? '' : 's'}';
-    }
-    if (result.isEmpty) {
-      result = '0 days';
-    }
-    
     return 'Purchased: ${DateFormat('MMM d, yyyy').format(purchaseDate)}\n$result';
   }
 

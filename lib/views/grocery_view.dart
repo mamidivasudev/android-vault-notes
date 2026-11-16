@@ -78,6 +78,10 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
   @override
   void initState() {
     super.initState();
+    // The Add item button hides while the search box is in use.
+    _focus.addListener(() {
+      if (mounted) setState(() {});
+    });
     _input.addListener(() {
       if (!mounted) return;
       // Typing replaces the tabs with suggestions; come back on To buy.
@@ -282,14 +286,36 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
     final bought = items.where((i) => i.isPurchased).toList()
       ..sort((a, b) => (b.purchasedAt ?? b.createdAt).compareTo(a.purchasedAt ?? a.createdAt));
     final typing = _input.text.trim().isNotEmpty;
+    final selecting = ref.watch(selectedGroceryProvider).isNotEmpty || ref.watch(isSelectionModeProvider);
+    final showAdd = !typing && !_focus.hasFocus && !selecting;
 
-    return Column(
+    return Stack(
       children: [
-        _buildInput(items, bought),
-        _buildHeader(items, toBuy, bought),
-        Expanded(
-          child: typing ? _buildSuggestions(items) : _buildList(items, toBuy, bought),
+        Column(
+          children: [
+            _buildInput(items, bought),
+            _buildHeader(items, toBuy, bought),
+            Expanded(
+              child: typing ? _buildSuggestions(items) : _buildList(items, toBuy, bought),
+            ),
+          ],
         ),
+        // "+" button like the other tabs: opens the search box, same as tapping it.
+        if (showAdd)
+          Positioned(
+            right: 16,
+            bottom: 16,
+            child: FloatingActionButton(
+              heroTag: 'grocery_add_item',
+              tooltip: 'Add item',
+              elevation: 4,
+              backgroundColor: const Color(0xFF1D63D2),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              onPressed: () => _focus.requestFocus(),
+              child: const Icon(Icons.add, size: 30),
+            ),
+          ),
       ],
     );
   }
@@ -522,7 +548,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
         ? Center(child: Text(emptyText, style: TextStyle(color: emptyColor, fontWeight: FontWeight.w600)))
         : ListView(
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            padding: const EdgeInsets.only(bottom: 32),
+            padding: const EdgeInsets.only(bottom: 88),
             children: [for (final item in list) row(item)],
           );
 

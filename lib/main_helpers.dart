@@ -404,6 +404,34 @@ void showNoteOptions(BuildContext context, WidgetRef ref, Note note) {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // Order: Copy, Share, Delete, Lock, then the rest (locked notes only show Lock).
+            if (!note.isLocked) ...[
+              ListTile(
+                leading: const Icon(Icons.copy, color: Color(0xFF1D63D2)),
+                title: const Text('Copy'),
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: noteShareText(note)));
+                  Navigator.pop(sheetContext);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.share, color: Color(0xFF1D63D2)),
+                title: const Text('Share'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  Share.share(noteShareText(note));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete, color: Colors.red),
+                title: const Text('Delete Note', style: TextStyle(color: Colors.red)),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  deleteNotesWithUndo(context, ref, [note.id]);
+                },
+              ),
+            ],
             ListTile(
               leading: Icon(note.isLocked ? Icons.lock_open : Icons.lock, color: const Color(0xFF1D63D2)),
               title: Text(note.isLocked ? 'Unlock' : 'Lock'),
@@ -423,16 +451,6 @@ void showNoteOptions(BuildContext context, WidgetRef ref, Note note) {
             ),
             if (!note.isLocked) ...[
               ListTile(
-                leading: const Icon(Icons.document_scanner_outlined, color: Color(0xFF1D63D2)),
-                title: const Text('Scan Text (OCR)'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (context) => NoteEditor(note: note, openOcrOnStart: true)),
-                  );
-                },
-              ),
-              ListTile(
                 leading: Icon(note.isPinned ? Icons.push_pin : Icons.push_pin_outlined, color: const Color(0xFF1D63D2)),
                 title: Text(note.isPinned ? 'Unpin' : 'Pin'),
                 onTap: () {
@@ -448,6 +466,16 @@ void showNoteOptions(BuildContext context, WidgetRef ref, Note note) {
                   ref.read(notesProvider.notifier).toggleFavorite(note.id);
                   Navigator.pop(sheetContext);
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(note.isFavorite ? 'Removed from Favorites' : 'Added to Favorites')));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.document_scanner_outlined, color: Color(0xFF1D63D2)),
+                title: const Text('Scan Text (OCR)'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (context) => NoteEditor(note: note, openOcrOnStart: true)),
+                  );
                 },
               ),
               ListTile(
@@ -470,23 +498,6 @@ void showNoteOptions(BuildContext context, WidgetRef ref, Note note) {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.copy, color: Color(0xFF1D63D2)),
-                title: const Text('Copy'),
-                onTap: () {
-                  Clipboard.setData(ClipboardData(text: noteShareText(note)));
-                  Navigator.pop(sheetContext);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.share, color: Color(0xFF1D63D2)),
-                title: const Text('Share'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  Share.share(noteShareText(note));
-                },
-              ),
-              ListTile(
                 leading: const Icon(Icons.ios_share, color: Color(0xFF1D63D2)),
                 title: const Text('Export'),
                 subtitle: const Text('As a .txt or PDF file'),
@@ -501,14 +512,6 @@ void showNoteOptions(BuildContext context, WidgetRef ref, Note note) {
                 onTap: () {
                   Navigator.pop(sheetContext);
                   _moveNoteDialog(context, ref, note);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.delete, color: Colors.red),
-                title: const Text('Delete Note', style: TextStyle(color: Colors.red)),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  deleteNotesWithUndo(context, ref, [note.id]);
                 },
               ),
             ],

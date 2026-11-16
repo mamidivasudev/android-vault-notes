@@ -26,8 +26,8 @@ class VaultService {
     'profiles_data.json',
     'app_settings.json', // grocery list, budgets, docs categories, service odometer
     'medicines_data.json',
-    'money_data.json',
     'dates_data.json',
+    'date_categories.json',
     'journal_data.json',
   ];
 
@@ -487,7 +487,7 @@ class VaultService {
   }
 
   /// Reads the list stored under [key] in [fileName] (used by the optional
-  /// Medicines / Money / Dates / Journal tabs). A file that can't be read is
+  /// Medicines / Dates / Journal tabs). A file that can't be read is
   /// kept aside before it is next written.
   Future<List<dynamic>> loadExtraList(String fileName, String key) async {
     final path = await getVaultPath();

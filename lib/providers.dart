@@ -379,7 +379,7 @@ class EnabledTabsNotifier extends Notifier<List<String>> {
       newState.remove(tabId);
     }
     // Keep order
-    final ordered = ['notes', 'expenses', 'links', 'tables', 'bills', 'docs', 'mileage', 'grocery', 'medicines', 'money', 'dates', 'journal']
+    final ordered = ['notes', 'expenses', 'links', 'tables', 'bills', 'docs', 'mileage', 'grocery', 'medicines', 'dates', 'journal']
         .where((t) => newState.contains(t))
         .toList();
     state = ordered;
@@ -1871,8 +1871,8 @@ class SyncNotifier extends Notifier<SyncStatus> {
       ref.invalidate(groceryCatalogProvider);
       ref.invalidate(enabledTabsProvider);
       ref.invalidate(medicinesProvider);
-      ref.invalidate(moneyProvider);
       ref.invalidate(importantDatesProvider);
+      ref.invalidate(dateCategoriesProvider);
       ref.invalidate(journalProvider);
       ref.invalidate(profilesProvider); // profiles_data.json was replaced too
 
@@ -1907,7 +1907,7 @@ final syncProvider = NotifierProvider<SyncNotifier, SyncStatus>(SyncNotifier.new
 /// Used after a Drive restore and once at app start (bill reminders are
 /// scheduled a couple of cycles ahead, so this keeps them topped up).
 Future<void> rescheduleAllNotifications(VaultService vaultService, {bool askPermission = true}) async {
-  await rescheduleExtrasAlerts(vaultService); // medicines, money due dates, birthdays
+  await rescheduleExtrasAlerts(vaultService); // medicines, birthdays and other dates
   try {
     final data = await vaultService.loadVaultData();
     for (final raw in (data['bills'] as List? ?? [])) {
@@ -2180,24 +2180,6 @@ class BillsNotifier extends Notifier<List<Bill>> {
 
 final billsProvider = NotifierProvider<BillsNotifier, List<Bill>>(BillsNotifier.new);
 
-class SelectedRemindersNotifier extends Notifier<Set<String>> {
-  @override
-  Set<String> build() => {};
-
-  void toggle(String id) {
-    if (state.contains(id)) {
-      state = {for (final item in state) if (item != id) item};
-    } else {
-      state = {...state, id};
-    }
-  }
-
-  void clear() => state = {};
-  
-  void selectAll(Set<String> ids) => state = ids;
-}
-
-final selectedRemindersProvider = NotifierProvider<SelectedRemindersNotifier, Set<String>>(SelectedRemindersNotifier.new);
 
 class SelectedBillsNotifier extends Notifier<Set<String>> {
   @override

@@ -61,13 +61,24 @@ abstract class VaultListNotifier<T> extends Notifier<List<T>> {
     await ready;
     await _write(state.where((e) => idOf(e) != id).toList());
   }
+
+  Future<void> removeMany(Set<String> ids) async {
+    await ready;
+    await _write(state.where((e) => !ids.contains(idOf(e))).toList());
+  }
+
+  /// Puts deleted items back (Undo).
+  Future<void> restoreMany(List<T> items) async {
+    await ready;
+    final ids = items.map(idOf).toSet();
+    await _write([...state.where((e) => !ids.contains(idOf(e))), ...items]);
+  }
 }
 
 // ── Notifications ────────────────────────────────────────────────────────────
 
 int _alertId(String key, int base, int slot) => (key.hashCode & 0x00FFFFFF) | ((base + slot) << 24);
 const _medicineBase = 64; // slots 0-15
-const _moneyBase = 96;
 const _dateBase = 100; // +0 on the day, +1 the day before
 const _maxMedicineTimes = 16;
 
@@ -81,8 +92,8 @@ Future<void> _notify(int id, String title, String body, DateTime when, {DateTime
       const NotificationDetails(
         android: AndroidNotificationDetails(
           'daily_extras_channel',
-          'Medicines, money & dates',
-          channelDescription: 'Medicine times, money due dates, birthdays and anniversaries',
+          'Medicines & dates',
+          channelDescription: 'Medicine times, birthdays and anniversaries',
           importance: Importance.max,
           priority: Priority.high,
         ),
@@ -130,25 +141,25 @@ Future<void> cancelMedicine(String id) async {
   }
 }
 
-Future<void> scheduleMoney(MoneyEntry e) async {
-  final id = _alertId(e.id, _moneyBase, 0);
-  await _cancel(id);
-  final due = e.dueDate;
-  if (due == null || e.settled) return;
-  final when = DateTime(due.year, due.month, due.day, 9);
-  if (!when.isAfter(DateTime.now())) return;
-  final left = e.remaining.toStringAsFixed(e.remaining % 1 == 0 ? 0 : 2);
-  await _notify(
-    id,
-    e.lent ? '💰 Money to collect' : '💰 Money to return',
-    e.lent ? '${e.person} owes you ₹$left today' : 'Return ₹$left to ${e.person} today',
-    when,
-  );
-}
-
 Future<void> scheduleDate(ImportantDate d) async {
   await _cancel(_alertId(d.id, _dateBase, 0));
   await _cancel(_alertId(d.id, _dateBase, 1));
+  await _cancel(_alertId(d.id, _dateBase, 2));
+  if (d.isHousehold) {
+    // No yearly alert; just the optional reminder date, at 9 AM.
+    final r = d.remindOn;
+    if (r == null) return;
+    final when = DateTime(r.year, r.month, r.day, 9);
+    if (!when.isAfter(DateTime.now())) return;
+    final start = d.startDate;
+    await _notify(
+      _alertId(d.id, _dateBase, 2),
+      '🏠 Reminder: ${d.title}',
+      'Since ${start.day}/${start.month}/${start.year} · ${when.difference(start).inDays} days',
+      when,
+    );
+    return;
+  }
   final now = DateTime.now();
   final emoji = d.type == 'Birthday' ? '🎂' : d.type == 'Anniversary' ? '💍' : '📅';
   final years = d.yearsOnNext(now);
@@ -177,19 +188,15 @@ Future<void> scheduleDate(ImportantDate d) async {
 Future<void> cancelDate(String id) async {
   await _cancel(_alertId(id, _dateBase, 0));
   await _cancel(_alertId(id, _dateBase, 1));
+  await _cancel(_alertId(id, _dateBase, 2));
 }
 
-/// Re-schedules every medicine, money and date alert (app start, after a restore).
+/// Re-schedules every medicine and date alert (app start, after a restore).
 Future<void> rescheduleExtrasAlerts(VaultService vault) async {
   try {
     for (final raw in await vault.loadExtraList(MedicinesNotifier.file, 'medicines')) {
       try {
         await scheduleMedicine(Medicine.fromJson(Map<String, dynamic>.from(raw as Map)));
-      } catch (_) {}
-    }
-    for (final raw in await vault.loadExtraList(MoneyNotifier.file, 'money')) {
-      try {
-        await scheduleMoney(MoneyEntry.fromJson(Map<String, dynamic>.from(raw as Map)));
       } catch (_) {}
     }
     for (final raw in await vault.loadExtraList(ImportantDatesNotifier.file, 'dates')) {
@@ -240,6 +247,13 @@ class MedicinesNotifier extends VaultListNotifier<Medicine> {
     await cancelMedicine(id);
   }
 
+  Future<void> deleteMany(Set<String> ids) async {
+    await removeMany(ids);
+    for (final id in ids) {
+      await cancelMedicine(id);
+    }
+  }
+
   @override
   Future<void> afterChange(List<Medicine> items) async {
     for (final m in items) {
@@ -249,34 +263,6 @@ class MedicinesNotifier extends VaultListNotifier<Medicine> {
 }
 
 final medicinesProvider = NotifierProvider<MedicinesNotifier, List<Medicine>>(MedicinesNotifier.new);
-
-class MoneyNotifier extends VaultListNotifier<MoneyEntry> {
-  static const file = 'money_data.json';
-  @override
-  String get fileName => file;
-  @override
-  String get jsonKey => 'money';
-  @override
-  MoneyEntry fromJson(Map<String, dynamic> json) => MoneyEntry.fromJson(json);
-  @override
-  Map<String, dynamic> toJson(MoneyEntry item) => item.toJson();
-  @override
-  String idOf(MoneyEntry item) => item.id;
-
-  Future<void> delete(String id) async {
-    await remove(id);
-    await _cancel(_alertId(id, _moneyBase, 0));
-  }
-
-  @override
-  Future<void> afterChange(List<MoneyEntry> items) async {
-    for (final e in items) {
-      await scheduleMoney(e);
-    }
-  }
-}
-
-final moneyProvider = NotifierProvider<MoneyNotifier, List<MoneyEntry>>(MoneyNotifier.new);
 
 class ImportantDatesNotifier extends VaultListNotifier<ImportantDate> {
   static const file = 'dates_data.json';
@@ -296,6 +282,15 @@ class ImportantDatesNotifier extends VaultListNotifier<ImportantDate> {
     await cancelDate(id);
   }
 
+  Future<void> deleteMany(Set<String> ids) async {
+    await ready;
+    await _write(state.where((d) => !ids.contains(d.id)).toList());
+    for (final id in ids) {
+      await cancelDate(id);
+    }
+  }
+
+
   @override
   Future<void> afterChange(List<ImportantDate> items) async {
     for (final d in items) {
@@ -305,6 +300,23 @@ class ImportantDatesNotifier extends VaultListNotifier<ImportantDate> {
 }
 
 final importantDatesProvider = NotifierProvider<ImportantDatesNotifier, List<ImportantDate>>(ImportantDatesNotifier.new);
+
+/// The user's own Dates categories (the built-in ones are not stored).
+class DateCategoriesNotifier extends VaultListNotifier<DateCategory> {
+  static const file = 'date_categories.json';
+  @override
+  String get fileName => file;
+  @override
+  String get jsonKey => 'categories';
+  @override
+  DateCategory fromJson(Map<String, dynamic> json) => DateCategory.fromJson(json);
+  @override
+  Map<String, dynamic> toJson(DateCategory item) => item.toJson();
+  @override
+  String idOf(DateCategory item) => item.name.toLowerCase();
+}
+
+final dateCategoriesProvider = NotifierProvider<DateCategoriesNotifier, List<DateCategory>>(DateCategoriesNotifier.new);
 
 class JournalNotifier extends VaultListNotifier<JournalEntry> {
   static const file = 'journal_data.json';

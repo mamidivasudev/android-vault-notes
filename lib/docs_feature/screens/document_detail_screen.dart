@@ -543,7 +543,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).viewPadding.bottom),
         child: Container(
           padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
           decoration: const BoxDecoration(

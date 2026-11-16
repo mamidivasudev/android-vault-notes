@@ -14,7 +14,7 @@ import 'providers.dart';
 import 'notification_service.dart';
 import 'views/notes_view.dart';
 import 'extras/medicines_view.dart';
-import 'extras/money_view.dart';
+import 'widgets/scroll_nav_bar.dart';
 import 'extras/dates_view.dart';
 import 'extras/journal_view.dart';
 import 'views/expenses_view.dart';
@@ -22,7 +22,6 @@ import 'views/links_view.dart';
 import 'views/tables_view.dart';
 import 'views/recycle_bin_view.dart';
 import 'views/note_editor.dart';
-import 'views/reminders_view.dart';
 import 'views/bills_view.dart';
 import 'views/mileage_view.dart';
 import 'views/grocery_view.dart';
@@ -108,9 +107,8 @@ const allTabs = [
   AppTab('grocery', 'Grocery', Icons.shopping_cart_outlined, Icons.shopping_cart, 10),
   // Optional tabs, off until switched on in tab settings.
   AppTab('medicines', 'Medicines', Icons.medication_outlined, Icons.medication, 11),
-  AppTab('money', 'Money', Icons.currency_rupee_outlined, Icons.currency_rupee, 12),
-  AppTab('dates', 'Dates', Icons.cake_outlined, Icons.cake, 13),
-  AppTab('journal', 'Journal', Icons.menu_book_outlined, Icons.menu_book, 14),
+  AppTab('dates', 'Dates', Icons.event_outlined, Icons.event, 13),
+  AppTab('journal', 'Diary', Icons.menu_book_outlined, Icons.menu_book, 14),
 ];
 
 class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStateMixin {
@@ -490,11 +488,10 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     final selectedNotes = ref.watch(selectedNotesProvider);
     final selectedExpenses = ref.watch(selectedExpensesProvider);
     final selectedLinks = ref.watch(selectedLinksProvider);
-    final selectedReminders = ref.watch(selectedRemindersProvider);
     final selectedBills = ref.watch(selectedBillsProvider);
     final selectedGrocery = ref.watch(selectedGroceryProvider);
     final isEditingTable = ref.watch(editingTableProvider) != null;
-    final isSelectionMode = ref.watch(isSelectionModeProvider) || selectedNotes.isNotEmpty || selectedExpenses.isNotEmpty || selectedLinks.isNotEmpty || selectedReminders.isNotEmpty || selectedBills.isNotEmpty || selectedGrocery.isNotEmpty;
+    final isSelectionMode = ref.watch(isSelectionModeProvider) || selectedNotes.isNotEmpty || selectedExpenses.isNotEmpty || selectedLinks.isNotEmpty || selectedBills.isNotEmpty || selectedGrocery.isNotEmpty;
 
     return PopScope(
       canPop: false,
@@ -513,7 +510,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
           ref.read(selectedExpensesProvider.notifier).clear();
           ref.read(selectedLinksProvider.notifier).clear();
           ref.read(isSelectionModeProvider.notifier).setState(false);
-          ref.read(selectedRemindersProvider.notifier).clear();
           ref.read(selectedBillsProvider.notifier).clear();
           ref.read(selectedGroceryProvider.notifier).clear();
           return;
@@ -551,7 +547,8 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
         drawer: isEditingTable ? null : _buildDrawer(vaultPath),
         appBar: (isEditingTable || _currentIndex == 8 || _currentIndex == 9) ? null : _buildAppBar(isSelectionMode, selectedNotes.length, selectedExpenses.length, vaultPath),
         body: _buildBody(),
-        bottomNavigationBar: (isSelectionMode || isEditingTable || (_currentIndex > 3 && _currentIndex != 7 && _currentIndex != 8 && _currentIndex != 9 && _currentIndex != 10))
+        // Hidden only on the menu-only screens (4-6: Recycle Bin, …); every tab keeps it.
+        bottomNavigationBar: (isSelectionMode || isEditingTable || (_currentIndex >= 4 && _currentIndex <= 6))
             ? null 
             : Builder(
                 builder: (context) {
@@ -562,6 +559,29 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                   int navIndex = visibleTabs.indexWhere((t) => t.stateIndex == _currentIndex);
                   if (navIndex == -1) navIndex = 0; // Fallback if somehow invalid
                   
+                  Future<void> select(int index) async {
+                    final target = visibleTabs[index].stateIndex;
+                    if (target == 8 && _currentIndex != 8 && await AuthService.isBiometricEnabled()) {
+                      final ok = await AuthService.authenticateBiometrics();
+                      if (!ok || !mounted) return;
+                    }
+                    setState(() {
+                      _currentIndex = target;
+                      _isSearching = false;
+                      _searchController.clear();
+                      ref.read(searchQueryProvider.notifier).state = '';
+                    });
+                  }
+
+                  // More than 7 tabs: first 7 at normal size, the rest by scrolling sideways.
+                  if (visibleTabs.length > 7) {
+                    return ScrollableNavBar(
+                      items: [for (final t in visibleTabs) (icon: t.icon, selectedIcon: t.selectedIcon, label: t.label)],
+                      selectedIndex: navIndex,
+                      onSelected: select,
+                    );
+                  }
+
                   return NavigationBarTheme(
                     data: NavigationBarThemeData(
                       labelTextStyle: WidgetStateProperty.all(
@@ -570,19 +590,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                     ),
                     child: NavigationBar(
                       selectedIndex: navIndex,
-                      onDestinationSelected: (index) async {
-                        final target = visibleTabs[index].stateIndex;
-                        if (target == 8 && _currentIndex != 8 && await AuthService.isBiometricEnabled()) {
-                          final ok = await AuthService.authenticateBiometrics();
-                          if (!ok || !mounted) return;
-                        }
-                        setState(() {
-                          _currentIndex = target;
-                          _isSearching = false;
-                          _searchController.clear();
-                          ref.read(searchQueryProvider.notifier).state = '';
-                        });
-                      },
+                      onDestinationSelected: select,
                       destinations: visibleTabs.map((t) => 
                         NavigationDestination(icon: Icon(t.icon), selectedIcon: Icon(t.selectedIcon), label: t.label)
                       ).toList(),
@@ -1224,76 +1232,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                     ],
                   ),
                 ),
-                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  child: Row(
-                    children: [
-                      // Reminders Card
-                      Expanded(
-                        child: Consumer(
-                          builder: (context, ref, _) {
-                            final isDark = ref.watch(themeModeProvider) == ThemeMode.dark;
-                            return InkWell(
-                              onTap: () {
-                                Navigator.pop(context);
-                                setState(() => _currentIndex = 5);
-                              },
-                              borderRadius: BorderRadius.circular(12),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: isDark 
-                                      ? Colors.blue.withOpacity(0.08) 
-                                      : const Color(0xFFF1F5F9),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: isDark 
-                                        ? Colors.blue.withOpacity(0.15) 
-                                        : const Color(0xFFE2E8F0),
-                                  ),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Icon(
-                                          Icons.notifications_active_outlined,
-                                          color: Color(0xFFF59E0B),
-                                          size: 20,
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'Reminders',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                        color: isDark ? Colors.white70 : Colors.black87,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      'Scheduled alerts',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: isDark ? Colors.white38 : Colors.black54,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
                 ListTile(
                   dense: true,
                   visualDensity: const VisualDensity(horizontal: 0, vertical: -4),
@@ -1410,11 +1348,15 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
       'docs_data': {'name': 'Docs (Images & Data)', 'icon': Icons.folder, 'color': Colors.cyan},
       'mileage_data.json': {'name': 'Fuel History', 'icon': Icons.local_gas_station, 'color': Colors.deepPurple},
       'service_data.json': {'name': 'Service History', 'icon': Icons.build, 'color': Colors.deepOrange},
-      'reminders_data.json': {'name': 'Reminders', 'icon': Icons.alarm, 'color': Colors.amber},
+      'reminders_data.json': {'name': 'Note reminders', 'icon': Icons.alarm, 'color': Colors.amber},
       'monthly_reports.json': {'name': 'Monthly Reports', 'icon': Icons.bar_chart, 'color': Colors.indigo},
       'deleted_data.json': {'name': 'Recycle Bin', 'icon': Icons.delete_outline, 'color': Colors.red},
       'profiles_data.json': {'name': 'Sound Profiles', 'icon': Icons.volume_up, 'color': Colors.blueGrey},
       'app_settings.json': {'name': 'Grocery, Budgets & Settings', 'icon': Icons.shopping_cart, 'color': Colors.lightGreen},
+      'medicines_data.json': {'name': 'Medicines', 'icon': Icons.medication, 'color': Colors.pink},
+      'dates_data.json': {'name': 'Important Dates', 'icon': Icons.event, 'color': Colors.purple},
+      'date_categories.json': {'name': 'Date Categories', 'icon': Icons.category, 'color': Colors.purple},
+      'journal_data.json': {'name': 'Diary', 'icon': Icons.menu_book, 'color': Colors.brown},
     };
     
     Set<String> selectedFiles = Set.from(backupFiles);
@@ -1844,7 +1786,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
           ref.read(selectedNotesProvider.notifier).clear();
           ref.read(selectedExpensesProvider.notifier).clear();
           ref.read(selectedLinksProvider.notifier).clear();
-          ref.read(selectedRemindersProvider.notifier).clear();
           ref.read(selectedBillsProvider.notifier).clear();
           ref.read(selectedGroceryProvider.notifier).clear();
           ref.read(isSelectionModeProvider.notifier).setState(false);
@@ -1853,7 +1794,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
           if (_currentIndex == 0) return '$noteCount selected';
           if (_currentIndex == 1) return '$expCount selected';
           if (_currentIndex == 7) return '${ref.watch(selectedBillsProvider).length} selected';
-          if (_currentIndex == 5) return '${ref.watch(selectedRemindersProvider).length} selected';
           if (_currentIndex == 10) return '${ref.watch(selectedGroceryProvider).length} selected';
           return '${ref.watch(selectedLinksProvider).length} selected';
         }()),
@@ -1870,7 +1810,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                 }
                 if (_currentIndex == 1) return (ref.watch(selectedExpensesProvider).length == ref.watch(expensesProvider).length && ref.watch(expensesProvider).isNotEmpty) ? Icons.check_box : Icons.check_box_outline_blank;
                 if (_currentIndex == 7) return (ref.watch(selectedBillsProvider).length == ref.watch(billsProvider).length && ref.watch(billsProvider).isNotEmpty) ? Icons.check_box : Icons.check_box_outline_blank;
-                if (_currentIndex == 5) return (ref.watch(selectedRemindersProvider).length == ref.watch(remindersProvider).length && ref.watch(remindersProvider).isNotEmpty) ? Icons.check_box : Icons.check_box_outline_blank;
                 if (_currentIndex == 10) return (ref.watch(selectedGroceryProvider).length == ref.watch(groceryProvider).length && ref.watch(groceryProvider).isNotEmpty) ? Icons.check_box : Icons.check_box_outline_blank;
                 return (ref.watch(selectedLinksProvider).length == ref.watch(linkItemsProvider).length && ref.watch(linkItemsProvider).isNotEmpty) ? Icons.check_box : Icons.check_box_outline_blank;
               })()
@@ -1881,9 +1820,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                     ? _selectAllExpenses
                     : (_currentIndex == 7
                         ? _selectAllBills
-                        : (_currentIndex == 5 
-                            ? _selectAllReminders 
-                            : (_currentIndex == 10 ? _selectAllGrocery : _selectAllLinks)))),
+                        : (_currentIndex == 10 ? _selectAllGrocery : _selectAllLinks))),
           ),
           IconButton(
             icon: const Icon(Icons.delete, color: Colors.red),
@@ -1893,9 +1830,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                     ? _deleteSelectedExpenses
                     : (_currentIndex == 7
                         ? _deleteSelectedBills
-                        : (_currentIndex == 5 
-                            ? _deleteSelectedReminders 
-                            : (_currentIndex == 10 ? _deleteSelectedGrocery : _deleteSelectedLinks)))),
+                        : (_currentIndex == 10 ? _deleteSelectedGrocery : _deleteSelectedLinks))),
           ),
           if (_currentIndex == 0 || _currentIndex == 1 || _currentIndex == 2)
             IconButton(
@@ -1923,7 +1858,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
               controller: _searchController,
               autofocus: true,
               decoration: const InputDecoration(
-                hintText: 'Search Notes, Expenses, Links, Reminders...',
+                hintText: 'Search Notes, Expenses, Links...',
                 border: InputBorder.none
               ),
               onChanged: (value) {
@@ -1933,7 +1868,7 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
             )
           : RichText(
               text: TextSpan(
-                 text: _currentIndex == 1 ? 'My Expenses' : (_currentIndex == 2 ? 'My Links' : (_currentIndex == 3 ? 'My Tables' : (_currentIndex == 4 ? 'Recycle Bin' : (_currentIndex == 5 ? 'Reminders' : (_currentIndex == 7 ? 'Bills & Subscriptions' : (_currentIndex == 10 ? ' Grocery' : (const {11: 'Medicines', 12: 'Money lent / borrowed', 13: 'Important dates', 14: 'Journal'}[_currentIndex] ?? 'My Notes'))))))),
+                 text: _currentIndex == 1 ? 'My Expenses' : (_currentIndex == 2 ? 'My Links' : (_currentIndex == 3 ? 'My Tables' : (_currentIndex == 4 ? 'Recycle Bin' : ((_currentIndex == 7 ? 'Bills & Subscriptions' : (_currentIndex == 10 ? ' Grocery' : (const {11: 'Medicines', 13: 'Important dates', 14: 'Diary'}[_currentIndex] ?? 'My Notes'))))))),
                 style: GoogleFonts.lexend(fontSize: 18, fontWeight: FontWeight.bold, color: const Color(0xFF1D63D2)),
                 children: [
                   if (_currentIndex == 0) ...[
@@ -2080,9 +2015,13 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
               ),
             InkWell(
               onTap: () {
-                setState(() {
-                  _currentIndex = 5;
-                });
+                final id = activeReminders.first.id;
+                final note = ref.read(notesProvider).where((n) => noteReminderId(n.id) == id).firstOrNull;
+                if (note != null) {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => NoteEditor(note: note, isNew: false)));
+                } else {
+                  setState(() => _currentIndex = 0);
+                }
               },
               child: const Text(
                 'VIEW',
@@ -2122,13 +2061,11 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
       return _buildGlobalSearchResults(_searchController.text.trim().toLowerCase());
     }
     if (_currentIndex == 4) return const RecycleBinView();
-    if (_currentIndex == 5) return const RemindersView();
     if (_currentIndex == 7) return const BillsView();
     if (_currentIndex == 8) return const DocsHomeScreen();
     if (_currentIndex == 9) return MileageView(onGlobalSync: _exportData);
     if (_currentIndex == 10) return const GroceryView();
     if (_currentIndex == 11) return const MedicinesView();
-    if (_currentIndex == 12) return const MoneyView();
     if (_currentIndex == 13) return const ImportantDatesView();
     if (_currentIndex == 14) return const JournalView();
     return IndexedStack(index: _currentIndex, children: const [NotesView(), ExpensesView(), LinksView(), TablesView()]);
@@ -2141,10 +2078,8 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
         e.title.toLowerCase().contains(query) || (e.note?.toLowerCase().contains(query) ?? false)).toList();
     final links = ref.read(linkItemsProvider).where((l) =>
         l.title.toLowerCase().contains(query) || l.url.toLowerCase().contains(query)).toList();
-    final reminders = ref.read(remindersProvider).where((r) =>
-        r.title.toLowerCase().contains(query) || r.description.toLowerCase().contains(query)).toList();
 
-    final totalResults = notes.length + expenses.length + links.length + reminders.length;
+    final totalResults = notes.length + expenses.length + links.length;
 
     if (totalResults == 0) {
       return Center(
@@ -2200,16 +2135,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
             onTap: () => setState(() { _isSearching = false; _currentIndex = 2; }),
           )),
           const SizedBox(height: 8),
-        ],
-        if (reminders.isNotEmpty) ...[
-          _globalSearchSection('Reminders', Icons.alarm, const Color(0xFFF59E0B)),
-          ...reminders.map((r) => _globalSearchTile(
-            icon: Icons.alarm_outlined, color: const Color(0xFFF59E0B),
-            title: r.title,
-            subtitle: r.description.isNotEmpty ? r.description : DateFormat('dd MMM yyyy, hh:mm a').format(r.dateTime),
-            badge: 'REMINDER',
-            onTap: () => setState(() { _isSearching = false; _currentIndex = 5; }),
-          )),
         ],
       ],
     );
@@ -2290,13 +2215,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
             [VaultTableCell(text: ''), VaultTableCell(text: '')]
           ],
           category: selectedCat,
-        );
-        break;
-      case 5:
-        showDialog(
-          context: context,
-          useRootNavigator: true,
-          builder: (context) => const ReminderDialog(),
         );
         break;
       case 7:
@@ -2405,17 +2323,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${allIds.length} links selected')));
     }
   }
-  void _selectAllReminders() {
-    ref.read(isSelectionModeProvider.notifier).setState(true);
-    final allIds = ref.read(remindersProvider).map((r) => r.id).toSet();
-    final selectedIds = ref.read(selectedRemindersProvider);
-    if (selectedIds.length == allIds.length && allIds.isNotEmpty) {
-      ref.read(selectedRemindersProvider.notifier).clear();
-    } else {
-      ref.read(selectedRemindersProvider.notifier).selectAll(allIds);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${allIds.length} reminders selected')));
-    }
-  }
   void _selectAllBills() {
     ref.read(isSelectionModeProvider.notifier).setState(true);
     final allIds = ref.read(billsProvider).map((b) => b.id).toSet();
@@ -2486,25 +2393,6 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     );
   }
 
-  void _deleteSelectedReminders() {
-    final selectedIds = ref.read(selectedRemindersProvider).toList();
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Reminders?'),
-        content: Text('Are you sure you want to permanently delete these ${selectedIds.length} reminders?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          TextButton(onPressed: () {
-            final removed = ref.read(remindersProvider).where((r) => selectedIds.contains(r.id)).toList();
-            ref.read(selectedRemindersProvider.notifier).clear();
-            Navigator.pop(context);
-            deleteRemindersWithUndo(this.context, ref, removed, confirm: false);
-          }, child: const Text('Delete', style: TextStyle(color: Colors.red))),
-        ],
-      ),
-    );
-  }
 
   void _deleteSelectedBills() {
     final selectedIds = ref.read(selectedBillsProvider).toList();

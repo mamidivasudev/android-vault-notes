@@ -39,27 +39,6 @@ Future<bool> deleteBillsWithUndo(BuildContext context, WidgetRef ref, List<Bill>
   return true;
 }
 
-/// Deletes reminders with an Undo that restores them (and their alerts).
-Future<bool> deleteRemindersWithUndo(BuildContext context, WidgetRef ref, List<Reminder> reminders,
-    {bool confirm = true}) async {
-  if (reminders.isEmpty) return false;
-  if (confirm &&
-      !await confirmYesNo(context, 'Delete?',
-          reminders.length == 1 ? 'Delete this reminder?' : 'Delete ${reminders.length} reminders?')) {
-    return false;
-  }
-  if (!context.mounted) return false;
-  final messenger = ScaffoldMessenger.of(context);
-  final notifier = ref.read(remindersProvider.notifier);
-  notifier.deleteReminders(reminders.map((r) => r.id).toList());
-  showUndoSnackBar(
-    messenger,
-    reminders.length == 1 ? 'Reminder deleted' : '${reminders.length} reminders deleted',
-    () => notifier.restoreReminders(reminders),
-  );
-  return true;
-}
-
 /// Deletes a table with an Undo that puts it back.
 Future<bool> deleteTableWithUndo(BuildContext context, WidgetRef ref, VaultTable table, {bool confirm = true}) async {
   if (confirm &&

@@ -8,11 +8,42 @@ import 'extras_models.dart';
 import 'extras_store.dart';
 import 'extras_widgets.dart';
 
-class MedicinesView extends ConsumerWidget {
+class MedicinesView extends ConsumerStatefulWidget {
   const MedicinesView({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MedicinesView> createState() => _MedicinesViewState();
+}
+
+class _MedicinesViewState extends ConsumerState<MedicinesView> {
+  final Set<String> _selected = {};
+  bool _selecting = false;
+
+  void _toggle(String id) => setState(() => _selected.contains(id) ? _selected.remove(id) : _selected.add(id));
+
+  void _stopSelecting() => setState(() {
+        _selecting = false;
+        _selected.clear();
+      });
+
+  Future<void> _deleteSelected(List<Medicine> all) async {
+    if (_selected.isEmpty) {
+      showTopToast(context, 'Tick the medicines to delete first', icon: Icons.info, color: kToastBlue);
+      return;
+    }
+    final n = _selected.length;
+    if (!await confirmYesNo(context, 'Delete?', 'Delete $n medicine${n == 1 ? '' : 's'} and their alerts?')) return;
+    final removed = all.where((m) => _selected.contains(m.id)).toList();
+    final notifier = ref.read(medicinesProvider.notifier);
+    await notifier.deleteMany({..._selected});
+    if (!mounted) return;
+    _stopSelecting();
+    showTopToast(context, '$n medicine${n == 1 ? '' : 's'} deleted',
+        icon: Icons.delete, color: kToastRed, actionLabel: 'UNDO', onAction: () => notifier.restoreMany(removed));
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final meds = ref.watch(medicinesProvider);
     final scheme = Theme.of(context).colorScheme;
     final today = dayKey(DateTime.now());
@@ -21,68 +52,108 @@ class MedicinesView extends ConsumerWidget {
         for (final t in m.times) (med: m, time: t),
     ]..sort((a, b) => a.time.compareTo(b.time));
     final takenCount = doses.where((d) => d.med.isTaken(today, d.time)).length;
+    final allSelected = meds.isNotEmpty && _selected.length == meds.length;
 
-    return ExtrasScaffold(
-      onAdd: () => showMedicineEditor(context, ref, null),
-      child: meds.isEmpty
-          ? const ExtrasEmpty(icon: Icons.medication_outlined, text: 'No medicines yet', hint: 'Tap + to add a medicine and its times')
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
-              children: [
-                if (doses.isNotEmpty) ...[
-                  ExtrasHeading('Today', trailing: '$takenCount of ${doses.length} taken'),
-                  for (final d in doses)
-                    Card(
-                      margin: const EdgeInsets.symmetric(vertical: 3),
-                      child: CheckboxListTile(
-                        value: d.med.isTaken(today, d.time),
-                        onChanged: (_) {
-                          HapticFeedback.selectionClick();
-                          ref.read(medicinesProvider.notifier).toggleTaken(d.med.id, today, d.time);
-                        },
-                        secondary: Text(formatTime(d.time), style: TextStyle(fontWeight: FontWeight.w800, color: scheme.primary)),
-                        title: Text(
-                          d.med.name,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            decoration: d.med.isTaken(today, d.time) ? TextDecoration.lineThrough : null,
-                          ),
-                        ),
-                        subtitle: d.med.dose.isEmpty ? null : Text(d.med.dose),
-                      ),
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _stopSelecting();
+      },
+      child: ExtrasScaffold(
+        onAdd: () => showMedicineEditor(context, ref, null),
+        child: Column(
+          children: [
+            if (_selecting)
+              Material(
+                color: scheme.primary.withValues(alpha: 0.08),
+                child: Row(
+                  children: [
+                    IconButton(tooltip: 'Cancel', icon: const Icon(Icons.close), onPressed: _stopSelecting),
+                    Expanded(child: Text('${_selected.length} selected', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+                    IconButton(
+                      tooltip: 'Select all',
+                      icon: Icon(allSelected ? Icons.check_box : Icons.check_box_outline_blank),
+                      onPressed: () => setState(() {
+                        allSelected ? _selected.clear() : _selected.addAll(meds.map((m) => m.id));
+                      }),
                     ),
-                  const SizedBox(height: 12),
-                ],
-                const ExtrasHeading('All medicines'),
-                for (final m in meds)
-                  Card(
-                    margin: const EdgeInsets.symmetric(vertical: 3),
-                    child: ListTile(
-                      onTap: () => showMedicineEditor(context, ref, m),
-                      leading: CircleAvatar(
-                        backgroundColor: (m.isLow ? Colors.red : scheme.primary).withValues(alpha: 0.12),
-                        child: Icon(Icons.medication, color: m.isLow ? Colors.red : scheme.primary),
-                      ),
-                      title: Text(m.name, style: TextStyle(fontWeight: FontWeight.w600, color: m.active ? null : Colors.grey)),
-                      subtitle: Text([
-                        if (m.dose.isNotEmpty) m.dose,
-                        if (m.times.isNotEmpty) m.times.map(formatTime).join(', ') else 'No times set',
-                        if (!m.active) 'Paused',
-                      ].join('  ·  ')),
-                      trailing: m.stock == null
-                          ? null
-                          : Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text('${m.stock} left', style: TextStyle(fontWeight: FontWeight.w700, color: m.isLow ? Colors.red : null)),
-                                if (m.isLow) const Text('Low stock', style: TextStyle(color: Colors.red, fontSize: 11)),
-                              ],
+                    IconButton(tooltip: 'Delete', icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _deleteSelected(meds)),
+                  ],
+                ),
+              ),
+            Expanded(
+              child: meds.isEmpty
+                  ? const ExtrasEmpty(icon: Icons.medication_outlined, text: 'No medicines yet', hint: 'Tap + to add a medicine and its times')
+                  : ListView(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
+                      children: [
+                        if (doses.isNotEmpty && !_selecting) ...[
+                          ExtrasHeading('Today', trailing: '$takenCount of ${doses.length} taken'),
+                          for (final d in doses)
+                            Card(
+                              margin: const EdgeInsets.symmetric(vertical: 3),
+                              child: CheckboxListTile(
+                                value: d.med.isTaken(today, d.time),
+                                onChanged: (_) {
+                                  HapticFeedback.selectionClick();
+                                  ref.read(medicinesProvider.notifier).toggleTaken(d.med.id, today, d.time);
+                                },
+                                secondary: Text(formatTime(d.time), style: TextStyle(fontWeight: FontWeight.w800, color: scheme.primary)),
+                                title: Text(
+                                  d.med.name,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    decoration: d.med.isTaken(today, d.time) ? TextDecoration.lineThrough : null,
+                                  ),
+                                ),
+                                subtitle: d.med.dose.isEmpty ? null : Text(d.med.dose),
+                              ),
                             ),
+                          const SizedBox(height: 12),
+                        ],
+                        const ExtrasHeading('All medicines'),
+                        for (final m in meds)
+                          Card(
+                            margin: const EdgeInsets.symmetric(vertical: 3),
+                            color: _selected.contains(m.id) ? scheme.primary.withValues(alpha: 0.15) : null,
+                            child: ListTile(
+                              onTap: () => _selecting ? _toggle(m.id) : showMedicineEditor(context, ref, m),
+                              onLongPress: () => _selecting
+                                  ? _toggle(m.id)
+                                  : setState(() {
+                                      _selecting = true;
+                                      _selected.add(m.id);
+                                    }),
+                              leading: _selecting
+                                  ? Checkbox(value: _selected.contains(m.id), onChanged: (_) => _toggle(m.id))
+                                  : CircleAvatar(
+                                      backgroundColor: (m.isLow ? Colors.red : scheme.primary).withValues(alpha: 0.12),
+                                      child: Icon(Icons.medication, color: m.isLow ? Colors.red : scheme.primary),
+                                    ),
+                              title: Text(m.name, style: TextStyle(fontWeight: FontWeight.w600, color: m.active ? null : Colors.grey)),
+                              subtitle: Text([
+                                if (m.dose.isNotEmpty) m.dose,
+                                if (m.times.isNotEmpty) m.times.map(formatTime).join(', ') else 'No times set',
+                                if (!m.active) 'Paused',
+                              ].join('  ·  ')),
+                              trailing: m.stock == null
+                                  ? null
+                                  : Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                      children: [
+                                        Text('${m.stock} left', style: TextStyle(fontWeight: FontWeight.w700, color: m.isLow ? Colors.red : null)),
+                                        if (m.isLow) const Text('Low stock', style: TextStyle(color: Colors.red, fontSize: 11)),
+                                      ],
+                                    ),
+                            ),
+                          ),
+                      ],
                     ),
-                  ),
-              ],
             ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -139,7 +210,13 @@ class _MedicineEditorState extends ConsumerState<_MedicineEditor> {
 
   Future<void> _save() async {
     final name = _name.text.trim();
-    if (name.isEmpty) return;
+    if (name.isEmpty) {
+      showTopToast(context, 'Enter the medicine name', icon: Icons.info, color: kToastBlue);
+      return;
+    }
+    // Changing a saved medicine asks first.
+    if (widget.med != null && !await confirmYesNo(context, 'Update?', 'Save the changes to $name?')) return;
+    if (!mounted) return;
     final stock = int.tryParse(_stock.text.trim());
     final base = widget.med ?? Medicine(name: name);
     final med = base.copyWith(
@@ -176,6 +253,7 @@ class _MedicineEditorState extends ConsumerState<_MedicineEditor> {
     return ExtrasSheet(
       title: widget.med == null ? 'New medicine' : 'Edit medicine',
       onSave: _save,
+      saveLabel: widget.med == null ? 'Save' : 'Update',
       onDelete: widget.med == null ? null : _delete,
       children: [
         TextField(controller: _name, autofocus: widget.med == null, textCapitalization: TextCapitalization.words, decoration: const InputDecoration(labelText: 'Medicine name', border: OutlineInputBorder())),

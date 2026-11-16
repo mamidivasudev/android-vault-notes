@@ -27,24 +27,6 @@ void main() {
     });
   });
 
-  group('Money', () {
-    test('remaining goes down with payments and settles', () {
-      final e = MoneyEntry(person: 'Ravi', amount: 1000, lent: true, date: DateTime(2026, 1, 1));
-      final part = e.copyWith(payments: [MoneyPayment(amount: 400, date: DateTime(2026, 2, 1))]);
-      expect(part.remaining, 600);
-      expect(part.settled, isFalse);
-      final done = part.copyWith(payments: [...part.payments, MoneyPayment(amount: 600, date: DateTime(2026, 3, 1))]);
-      expect(done.settled, isTrue);
-    });
-
-    test('overdue only when unpaid and past the due date', () {
-      final e = MoneyEntry(person: 'A', amount: 100, lent: false, date: DateTime(2026, 1, 1), dueDate: DateTime(2026, 2, 1));
-      expect(e.isOverdue(DateTime(2026, 2, 2)), isTrue);
-      expect(e.isOverdue(DateTime(2026, 1, 31)), isFalse);
-      expect(MoneyEntry.fromJson(e.toJson()).dueDate, DateTime(2026, 2, 1));
-    });
-  });
-
   group('Medicines', () {
     test('ticks per day and stock survive saving and loading', () {
       final m = Medicine(name: 'Dolo', times: ['21:00', '08:00'], stock: 10, taken: {
@@ -59,10 +41,12 @@ void main() {
     });
   });
 
-  test('journal entry keeps its day and mood', () {
-    final j = JournalEntry(day: DateTime(2026, 11, 16), text: 'Good day', mood: '🙂');
+  test('diary entry keeps its date and time', () {
+    final j = JournalEntry(day: DateTime(2026, 11, 16, 17, 30), text: 'Good day');
     final again = JournalEntry.fromJson(j.toJson());
-    expect(dayKey(again.day), '2026-11-16');
-    expect(again.mood, '🙂');
+    expect(again.day, DateTime(2026, 11, 16, 17, 30));
+    expect(again.text, 'Good day');
+    // Entries saved before times were kept still load (as midnight).
+    expect(JournalEntry.fromJson({'day': '2026-11-16', 'text': 'x'}).day, DateTime(2026, 11, 16));
   });
 }

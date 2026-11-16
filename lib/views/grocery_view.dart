@@ -551,6 +551,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
             }
           },
           onEdit: () => showGroceryItemEditor(context, ref, item),
+          onDelete: () => deleteGroceryWithUndo(context, ref, {item.id}),
         );
 
     final muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6);
@@ -757,6 +758,7 @@ class _GroceryRow extends StatelessWidget {
   final VoidCallback onToggle;
   final VoidCallback onLongPress;
   final VoidCallback onEdit;
+  final VoidCallback onDelete;
 
   const _GroceryRow({
     super.key,
@@ -767,6 +769,7 @@ class _GroceryRow extends StatelessWidget {
     required this.onToggle,
     required this.onLongPress,
     required this.onEdit,
+    required this.onDelete,
   });
 
   @override
@@ -883,6 +886,24 @@ class _GroceryRow extends StatelessWidget {
                     ),
                   ),
                 ),
+                // Bought items: ⋮ with "Move to To buy" and "Delete".
+                if (item.isPurchased)
+                  PopupMenuButton<String>(
+                    tooltip: 'More',
+                    padding: EdgeInsets.zero,
+                    icon: Icon(Icons.more_vert, size: 20, color: muted),
+                    onSelected: (v) => v == 'back' ? onToggle() : onDelete(),
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(
+                        value: 'back',
+                        child: ListTile(leading: Icon(Icons.undo), title: Text('Move to To buy'), contentPadding: EdgeInsets.zero),
+                      ),
+                      PopupMenuItem(
+                        value: 'delete',
+                        child: ListTile(leading: Icon(Icons.delete_outline, color: Colors.red), title: Text('Delete'), contentPadding: EdgeInsets.zero),
+                      ),
+                    ],
+                  ),
               ],
             ],
           ),
@@ -1167,7 +1188,7 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: EdgeInsets.only(left: 20, right: 20, bottom: MediaQuery.viewInsetsOf(context).bottom + 20),
+      padding: EdgeInsets.only(left: 20, right: 20, bottom: MediaQuery.viewInsetsOf(context).bottom + MediaQuery.viewPaddingOf(context).bottom + 20),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

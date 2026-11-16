@@ -409,9 +409,12 @@ class _DocumentFormScreenState extends State<DocumentFormScreen> {
         ),
         centerTitle: true,
       ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-        child: _buildSaveButton(isEditing),
+      // SafeArea keeps the button above the phone's nav buttons.
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+          child: _buildSaveButton(isEditing),
+        ),
       ),
       body: Form(
         key: _formKey,

@@ -79,14 +79,23 @@ class ExtrasSheet extends StatelessWidget {
   final List<Widget> children;
   final VoidCallback onSave;
   final VoidCallback? onDelete;
-  const ExtrasSheet({super.key, required this.title, required this.children, required this.onSave, this.onDelete});
+  final String saveLabel;
+  const ExtrasSheet({
+    super.key,
+    required this.title,
+    required this.children,
+    required this.onSave,
+    this.onDelete,
+    this.saveLabel = 'Save',
+  });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        // Keep Save above the phone's nav buttons.
+        padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.viewPaddingOf(context).bottom),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -104,7 +113,9 @@ class ExtrasSheet extends StatelessWidget {
                     onPressed: onDelete,
                   ),
                 const Spacer(),
-                FilledButton(onPressed: onSave, child: const Text('Save')),
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+                const SizedBox(width: 8),
+                FilledButton(onPressed: onSave, child: Text(saveLabel)),
               ],
             ),
           ],

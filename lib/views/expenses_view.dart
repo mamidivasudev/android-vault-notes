@@ -101,6 +101,7 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
     return Column(
       children: [
         CategoryChipBar(
+          compact: true,
           categories: fullCategories,
           selectedCategory: currentSelectedCat,
           onSelected: (cat) => ref.read(selectedExpenseCategoryProvider.notifier).state = cat,
@@ -121,8 +122,9 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
           }).length,
           trailingActions: [
             PopupMenuButton<String>(
-              icon: Icon(Icons.more_vert, size: 20, color: Theme.of(context).colorScheme.primary),
+              icon: Icon(Icons.more_vert, size: 19, color: Theme.of(context).colorScheme.primary),
               padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 30, minHeight: 34),
               tooltip: 'Options',
               onSelected: (val) {
                 final filtered = currentSelectedCat == 'All'

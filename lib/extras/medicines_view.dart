@@ -7,6 +7,8 @@ import '../widgets/top_toast.dart';
 import 'extras_models.dart';
 import 'extras_store.dart';
 import 'extras_widgets.dart';
+import '../utils/voice_parsers.dart';
+import '../widgets/voice_mic.dart';
 
 class MedicinesView extends ConsumerStatefulWidget {
   const MedicinesView({super.key});
@@ -25,6 +27,14 @@ class _MedicinesViewState extends ConsumerState<MedicinesView> {
         _selecting = false;
         _selected.clear();
       });
+
+  /// "Dolo 650 at 8 AM and 9 PM" → the form, filled in, to check.
+  Future<void> _byVoice() async {
+    final words = await listenOnce(context, title: 'Medicine by voice', hint: 'e.g. "Dolo 650 at 8 AM and 9 PM"');
+    if (words == null || !mounted) return;
+    final p = parseSpokenMedicine(words);
+    showMedicineEditor(context, ref, null, draft: Medicine(name: p.name, dose: p.dose, times: p.times));
+  }
 
   Future<void> _deleteSelected(List<Medicine> all) async {
     if (_selected.isEmpty) {
@@ -61,6 +71,7 @@ class _MedicinesViewState extends ConsumerState<MedicinesView> {
       },
       child: ExtrasScaffold(
         onAdd: () => showMedicineEditor(context, ref, null),
+        onVoice: _byVoice,
         child: Column(
           children: [
             if (_selecting)
@@ -166,31 +177,34 @@ String formatTime(String hhmm) {
   return '${h % 12 == 0 ? 12 : h % 12}:$m ${h < 12 ? 'AM' : 'PM'}';
 }
 
-Future<void> showMedicineEditor(BuildContext context, WidgetRef ref, Medicine? med) {
+/// [draft] pre-fills a new medicine (from voice); it is still saved as new.
+Future<void> showMedicineEditor(BuildContext context, WidgetRef ref, Medicine? med, {Medicine? draft}) {
   return showModalBottomSheet(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (_) => _MedicineEditor(med: med),
+    builder: (_) => _MedicineEditor(med: med, draft: draft),
   );
 }
 
 class _MedicineEditor extends ConsumerStatefulWidget {
   final Medicine? med;
-  const _MedicineEditor({this.med});
+  final Medicine? draft;
+  const _MedicineEditor({this.med, this.draft});
 
   @override
   ConsumerState<_MedicineEditor> createState() => _MedicineEditorState();
 }
 
 class _MedicineEditorState extends ConsumerState<_MedicineEditor> {
-  late final _name = TextEditingController(text: widget.med?.name ?? '');
-  late final _dose = TextEditingController(text: widget.med?.dose ?? '');
-  late final _stock = TextEditingController(text: widget.med?.stock?.toString() ?? '');
-  late final _perDose = TextEditingController(text: (widget.med?.perDose ?? 1).toString());
-  late final _lowAt = TextEditingController(text: (widget.med?.lowStockAt ?? 5).toString());
-  late final _notes = TextEditingController(text: widget.med?.notes ?? '');
-  late List<String> _times = [...?widget.med?.times];
+  Medicine? get _start => widget.med ?? widget.draft;
+  late final _name = TextEditingController(text: _start?.name ?? '');
+  late final _dose = TextEditingController(text: _start?.dose ?? '');
+  late final _stock = TextEditingController(text: _start?.stock?.toString() ?? '');
+  late final _perDose = TextEditingController(text: (_start?.perDose ?? 1).toString());
+  late final _lowAt = TextEditingController(text: (_start?.lowStockAt ?? 5).toString());
+  late final _notes = TextEditingController(text: _start?.notes ?? '');
+  late List<String> _times = [...?_start?.times];
   late bool _active = widget.med?.active ?? true;
 
   @override

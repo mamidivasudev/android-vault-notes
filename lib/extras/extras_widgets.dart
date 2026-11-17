@@ -1,25 +1,38 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../widgets/voice_mic.dart';
+
 /// Page frame for the optional tabs, with the same blue + button as the others.
 class ExtrasScaffold extends StatelessWidget {
   final Widget child;
   final VoidCallback onAdd;
-  const ExtrasScaffold({super.key, required this.child, required this.onAdd});
+  final VoidCallback? onVoice; // shows a green mic above +
+  const ExtrasScaffold({super.key, required this.child, required this.onAdd, this.onVoice});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: child,
-      floatingActionButton: FloatingActionButton(
-        heroTag: null,
-        onPressed: onAdd,
-        elevation: 4,
-        backgroundColor: const Color(0xFF1D63D2),
-        foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: const Icon(Icons.add, size: 30),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          if (onVoice != null) ...[
+            VoiceFab(heroTag: null, onPressed: onVoice!),
+            const SizedBox(height: 12),
+          ],
+          FloatingActionButton(
+            heroTag: null,
+            onPressed: onAdd,
+            elevation: 4,
+            backgroundColor: const Color(0xFF1D63D2),
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: const Icon(Icons.add, size: 30),
+          ),
+        ],
       ),
     );
   }

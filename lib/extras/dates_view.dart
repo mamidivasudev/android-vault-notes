@@ -7,6 +7,8 @@ import '../widgets/top_toast.dart';
 import 'extras_models.dart';
 import 'extras_store.dart';
 import 'extras_widgets.dart';
+import '../utils/voice_parsers.dart';
+import '../widgets/voice_mic.dart';
 
 /// Built-in categories, in the order they are offered. Household counts days
 /// since the date; the others come round every year.
@@ -79,6 +81,26 @@ class _ImportantDatesViewState extends ConsumerState<ImportantDatesView> {
         _selecting = false;
         _selected.clear();
       });
+
+  /// "gas started today, remind in 30 days" → the form, filled in, to check.
+  Future<void> _byVoice() async {
+    final words = await listenOnce(context,
+        title: 'Date by voice', hint: 'e.g. "gas started today, remind in 30 days" or "Amma birthday 15 March"');
+    if (words == null || !mounted) return;
+    final p = parseSpokenDate(words);
+    final day = p.date ?? DateUtils.dateOnly(DateTime.now());
+    final draft = ImportantDate(
+      title: p.title,
+      type: p.type,
+      since: p.type == 'Household',
+      month: day.month,
+      day: day.day,
+      year: p.yearKnown ? day.year : null,
+      remindOn: p.remindOn,
+    );
+    if (!mounted) return;
+    showDateEditor(context, ref, null, draft: draft);
+  }
 
   Future<void> _deleteSelected(List<ImportantDate> all) async {
     if (_selected.isEmpty) {
@@ -181,6 +203,7 @@ class _ImportantDatesViewState extends ConsumerState<ImportantDatesView> {
       },
       child: ExtrasScaffold(
         onAdd: () => showDateEditor(context, ref, null),
+        onVoice: _byVoice,
         child: Column(
           children: [
             if (_selecting)
@@ -230,37 +253,38 @@ class _ImportantDatesViewState extends ConsumerState<ImportantDatesView> {
   }
 }
 
-Future<void> showDateEditor(BuildContext context, WidgetRef ref, ImportantDate? date) {
+/// [draft] pre-fills a new date (from voice); it is still saved as new.
+Future<void> showDateEditor(BuildContext context, WidgetRef ref, ImportantDate? date, {ImportantDate? draft}) {
   return showModalBottomSheet(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (_) => _DateEditor(date: date),
+    builder: (_) => _DateEditor(date: date, draft: draft),
   );
 }
 
 class _DateEditor extends ConsumerStatefulWidget {
   final ImportantDate? date;
-  const _DateEditor({this.date});
+  final ImportantDate? draft;
+  const _DateEditor({this.date, this.draft});
 
   @override
   ConsumerState<_DateEditor> createState() => _DateEditorState();
 }
 
 class _DateEditorState extends ConsumerState<_DateEditor> {
-  late final _title = TextEditingController(text: widget.date?.title ?? '');
-  late final _notes = TextEditingController(text: widget.date?.notes ?? '');
-  late DateCategory _category = widget.date == null
-      ? _builtIn.first
-      : DateCategory(name: widget.date!.type, since: widget.date!.since);
+  ImportantDate? get _start => widget.date ?? widget.draft;
+  late final _title = TextEditingController(text: _start?.title ?? '');
+  late final _notes = TextEditingController(text: _start?.notes ?? '');
+  late DateCategory _category = _start == null ? _builtIn.first : DateCategory(name: _start!.type, since: _start!.since);
   // A new date starts on today; it can be changed before saving.
-  late DateTime? _picked = widget.date == null
+  late DateTime? _picked = _start == null
       ? DateUtils.dateOnly(DateTime.now())
-      : DateTime(widget.date!.year ?? DateTime.now().year, widget.date!.month, widget.date!.day);
+      : DateTime(_start!.year ?? DateTime.now().year, _start!.month, _start!.day);
   // Off for new dates: the picker starts on today, so its year is usually not the real birth year.
-  late bool _knowYear = widget.date != null && widget.date!.year != null;
+  late bool _knowYear = _start != null && _start!.year != null;
   late bool _dayBefore = widget.date?.remindDayBefore ?? true;
-  late DateTime? _remindOn = widget.date?.remindOn;
+  late DateTime? _remindOn = _start?.remindOn;
 
   @override
   void dispose() {

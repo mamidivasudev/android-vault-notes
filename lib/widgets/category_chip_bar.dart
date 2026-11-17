@@ -19,6 +19,8 @@ class CategoryChipBar extends StatelessWidget {
   final bool showPreviewsEnabled;
   final VoidCallback? onPreviewsToggle;
   final List<Widget>? trailingActions;
+  /// Shorter bar, smaller text and tighter icons (used by Expenses).
+  final bool compact;
 
   const CategoryChipBar({
     super.key,
@@ -38,6 +40,7 @@ class CategoryChipBar extends StatelessWidget {
     this.showPreviewsEnabled = false,
     this.onPreviewsToggle,
     this.trailingActions,
+    this.compact = false,
   });
 
   void _showAllCategories(BuildContext context) {
@@ -163,15 +166,19 @@ class CategoryChipBar extends StatelessWidget {
     final containerBg = isDark ? const Color(0xFF0F172A) : Colors.white;
     final primaryColor = Theme.of(context).colorScheme.primary;
     final dividerColor = isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final iconSize = compact ? 19.0 : 22.0;
+    // Compact icon buttons take less room so the category name has more space.
+    final tight = compact ? const BoxConstraints(minWidth: 34, minHeight: 34) : null;
+    final density = compact ? VisualDensity.compact : null;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+      padding: EdgeInsets.symmetric(vertical: compact ? 4 : 8, horizontal: 8),
       child: Container(
-        height: 56,
+        height: compact ? 44 : 56,
         decoration: BoxDecoration(
           color: containerBg,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: primaryColor.withOpacity(isDark ? 0.35 : 0.25), width: 1.5),
+          borderRadius: BorderRadius.circular(compact ? 12 : 16),
+          border: Border.all(color: primaryColor.withOpacity(isDark ? 0.35 : 0.25), width: compact ? 1.2 : 1.5),
           boxShadow: [
             BoxShadow(
               color: primaryColor.withOpacity(isDark ? 0.06 : 0.08),
@@ -183,7 +190,7 @@ class CategoryChipBar extends StatelessWidget {
         ),
         child: Row(
           children: [
-            const SizedBox(width: 12),
+            SizedBox(width: compact ? 8 : 12),
             Expanded(
               child: InkWell(
                 onTap: () => _showAllCategories(context),
@@ -199,7 +206,7 @@ class CategoryChipBar extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: GoogleFonts.lexend(
-                            fontSize: 16,
+                            fontSize: compact ? 14 : 16,
                             fontWeight: FontWeight.bold,
                             color: isDark ? Colors.white : Colors.black87,
                           ),
@@ -214,7 +221,7 @@ class CategoryChipBar extends StatelessWidget {
             Text(
               '$itemCount',
               style: GoogleFonts.lexend(
-                fontSize: 14,
+                fontSize: compact ? 12 : 14,
                 fontWeight: FontWeight.bold,
                 color: isDark ? Colors.white70 : Colors.grey[600],
               ),
@@ -223,47 +230,55 @@ class CategoryChipBar extends StatelessWidget {
               icon: Icon(
                 showFavoritesOnly ? Icons.favorite : Icons.favorite_border,
                 color: Colors.redAccent,
-                size: 22,
+                size: iconSize,
               ),
               onPressed: onFavoriteToggle,
               tooltip: 'Show Favorites Only',
               splashRadius: 24,
+              constraints: tight,
+              visualDensity: density,
             ),
             if (onPreviewsToggle != null)
               IconButton(
                 icon: Icon(
                   showPreviewsEnabled ? Icons.image : Icons.image_outlined,
                   color: showPreviewsEnabled ? primaryColor : (isDark ? Colors.white60 : Colors.grey.shade600),
-                  size: 22,
+                  size: iconSize,
                 ),
                 onPressed: onPreviewsToggle,
                 tooltip: showPreviewsEnabled ? 'Hide Previews' : 'Show Previews',
                 splashRadius: 24,
+              constraints: tight,
+              visualDensity: density,
               ),
             if (showGroupByDateToggle && onGroupByDateToggle != null)
               IconButton(
                 icon: Icon(
                   groupByDateEnabled ? Icons.visibility : Icons.visibility_off_outlined,
                   color: groupByDateEnabled ? primaryColor : (isDark ? Colors.white60 : Colors.grey.shade600),
-                  size: 22,
+                  size: iconSize,
                 ),
                 onPressed: onGroupByDateToggle,
                 tooltip: groupByDateEnabled ? 'Show flat list' : 'Group by date',
                 splashRadius: 24,
+              constraints: tight,
+              visualDensity: density,
               ),
             Container(
               width: 1,
-              height: 24,
+              height: compact ? 20 : 24,
               color: dividerColor,
             ),
             IconButton(
-              icon: Icon(Icons.settings_rounded, color: primaryColor, size: 22),
+              icon: Icon(Icons.settings_rounded, color: primaryColor, size: iconSize),
               onPressed: onManagePressed,
               tooltip: 'Manage Categories',
               splashRadius: 24,
+              constraints: tight,
+              visualDensity: density,
             ),
             if (trailingActions != null) ...trailingActions!,
-            const SizedBox(width: 8),
+            SizedBox(width: compact ? 4 : 8),
           ],
         ),
       ),

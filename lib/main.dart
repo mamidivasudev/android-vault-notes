@@ -1876,9 +1876,21 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
           ? TextField(
               controller: _searchController,
               autofocus: true,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 hintText: 'Search notes, expenses, links, dates…',
-                border: InputBorder.none
+                border: InputBorder.none,
+                // Say what to search for.
+                suffixIcon: IconButton(
+                  tooltip: 'Search by voice',
+                  icon: const Icon(Icons.mic, color: Color(0xFF10B981)),
+                  onPressed: () async {
+                    final words = await listenOnce(context, title: 'Search by voice', hint: 'Say what to find, e.g. "gas" or "milk"');
+                    if (words == null || !mounted) return;
+                    _searchController.text = words;
+                    ref.read(searchQueryProvider.notifier).state = words;
+                    setState(() {});
+                  },
+                ),
               ),
               onChanged: (value) {
                 setState(() {});

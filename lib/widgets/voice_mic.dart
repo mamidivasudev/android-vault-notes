@@ -112,7 +112,7 @@ class _VoiceMicState extends State<VoiceMic> {
 /// Green mic button used above the + button.
 class VoiceFab extends StatelessWidget {
   final VoidCallback onPressed;
-  final String heroTag;
+  final Object? heroTag;
   const VoiceFab({super.key, required this.onPressed, required this.heroTag});
 
   @override
@@ -124,4 +124,25 @@ class VoiceFab extends StatelessWidget {
         onPressed: onPressed,
         child: const Icon(Icons.mic),
       );
+}
+
+/// Opens a sheet with the mic and returns what was said (null if closed).
+Future<String?> listenOnce(BuildContext context, {required String title, required String hint}) {
+  return showModalBottomSheet<String>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 12),
+            VoiceMic(hint: hint, onResult: (words) => Navigator.pop(sheetContext, words)),
+          ],
+        ),
+      ),
+    ),
+  );
 }

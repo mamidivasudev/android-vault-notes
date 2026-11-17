@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import 'package:speech_to_text/speech_to_text.dart';
 
 import '../models.dart';
 import '../providers.dart';
 import '../utils/voice_expense.dart';
 import 'top_toast.dart';
+import 'voice_mic.dart';
 
 /// Mic → "add milk rupees 33" → a card showing Milk · ₹33 · category · today,
 /// which can be corrected before it is saved as an expense.
@@ -28,74 +28,26 @@ class _VoiceExpenseSheet extends ConsumerStatefulWidget {
 }
 
 class _VoiceExpenseSheetState extends ConsumerState<_VoiceExpenseSheet> {
-  final _speech = SpeechToText();
   final _title = TextEditingController();
   final _amount = TextEditingController();
   String _heard = '';
   String? _category;
-  bool _listening = false;
+  String _type = 'Out'; // In / Out / NA (None), like the add-expense window
   bool _done = false; // a result is shown for checking
-  String? _problem; // mic not allowed / speech not available / nothing heard
 
   List<String> get _categories => ref.read(expenseCategoriesProvider).where((c) => c != 'All' && c.trim().isNotEmpty).toList();
 
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _start());
-  }
-
-  @override
   void dispose() {
-    _speech.cancel();
     _title.dispose();
     _amount.dispose();
     super.dispose();
   }
 
-  Future<void> _start() async {
-    setState(() {
-      _problem = null;
-      _done = false;
-      _heard = '';
-    });
-    final ready = await _speech.initialize(
-      onError: (e) {
-        if (!mounted || _done) return;
-        setState(() {
-          _listening = false;
-          _problem = e.errorMsg.contains('no_match') || e.errorMsg.contains('speech_timeout')
-              ? "Didn't catch that. Tap the mic and try again."
-              : 'Could not listen (${e.errorMsg}). Check the internet or try again.';
-        });
-      },
-      onStatus: (s) {
-        if (!mounted) return;
-        if (s == 'done' || s == 'notListening') setState(() => _listening = false);
-      },
-    );
-    if (!mounted) return;
-    if (!ready) {
-      setState(() => _problem = 'Voice input is not available. Allow the microphone for this app in phone Settings.');
-      return;
-    }
-    HapticFeedback.selectionClick();
-    setState(() => _listening = true);
-    await _speech.listen(
-      onResult: (r) {
-        if (!mounted) return;
-        setState(() => _heard = r.recognizedWords);
-        if (r.finalResult) _useResult(r.recognizedWords);
-      },
-      listenOptions: SpeechListenOptions(
-        localeId: 'en_IN',
-        partialResults: true,
-        listenFor: const Duration(seconds: 20),
-        pauseFor: const Duration(seconds: 3),
-        cancelOnError: true,
-      ),
-    );
-  }
+  void _start() => setState(() {
+        _done = false;
+        _heard = '';
+      });
 
   void _useResult(String words) {
     final cats = _categories;
@@ -103,11 +55,13 @@ class _VoiceExpenseSheetState extends ConsumerState<_VoiceExpenseSheet> {
     // Category said aloud, else the last-used one, else the first.
     final last = ref.read(selectedExpenseCategoryProvider);
     setState(() {
-      _listening = false;
+      _heard = words;
       _done = true;
       _title.text = parsed.title;
       _amount.text = parsed.amount == null ? '' : NumberFormat('0.##').format(parsed.amount);
       _category = parsed.category ?? (cats.contains(last) ? last : (cats.isNotEmpty ? cats.first : null));
+      // Money coming in when it is said so ("received 500 from Ravi", "salary 30000").
+      _type = RegExp(r'\b(received|got|income|salary|credited|refund)\b').hasMatch(words.toLowerCase()) ? 'In' : 'Out';
     });
   }
 
@@ -119,7 +73,7 @@ class _VoiceExpenseSheetState extends ConsumerState<_VoiceExpenseSheet> {
       return;
     }
     final added = await ref.read(expensesProvider.notifier).addExpense(
-          Expense(title: title, amount: amount, category: _category!, date: DateTime.now(), type: 'Out'),
+          Expense(title: title, amount: amount, category: _category!, date: DateTime.now(), type: _type),
         );
     if (!mounted) return;
     if (!added) {
@@ -128,6 +82,30 @@ class _VoiceExpenseSheetState extends ConsumerState<_VoiceExpenseSheet> {
     }
     showTopToast(context, '$title · ₹${NumberFormat('#,##0.##').format(amount)} saved');
     Navigator.pop(context);
+  }
+
+  /// Same In / Out / None buttons as the add-expense window.
+  Widget _typeButton(String type, String label, Color color) {
+    final selected = _type == type;
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => setState(() => _type = type),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: selected ? color : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: selected ? color : Colors.grey.shade300),
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: selected ? Colors.white : Colors.grey.shade600, fontSize: 12, fontWeight: FontWeight.bold),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -145,32 +123,9 @@ class _VoiceExpenseSheetState extends ConsumerState<_VoiceExpenseSheet> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text('Add expense by voice', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 4),
-            Text('Say something like "add milk rupees 33"', style: TextStyle(color: muted)),
             const SizedBox(height: 16),
             if (!_done) ...[
-              Center(
-                child: GestureDetector(
-                  onTap: _listening ? () => _speech.stop() : _start,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    width: _listening ? 96 : 80,
-                    height: _listening ? 96 : 80,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: _listening ? Colors.red : scheme.primary,
-                      boxShadow: _listening ? [BoxShadow(color: Colors.red.withValues(alpha: 0.4), blurRadius: 24, spreadRadius: 4)] : null,
-                    ),
-                    child: Icon(_listening ? Icons.mic : Icons.mic_none, color: Colors.white, size: 40),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                _problem ?? (_listening ? (_heard.isEmpty ? 'Listening…' : _heard) : 'Tap the mic to speak'),
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 16, color: _problem != null ? Colors.red : null, fontWeight: FontWeight.w600),
-              ),
+              VoiceMic(hint: 'Say something like "add milk rupees 33"', onResult: _useResult),
               const SizedBox(height: 8),
             ] else ...[
               Text('Heard: "$_heard"', style: TextStyle(color: muted, fontStyle: FontStyle.italic)),
@@ -195,6 +150,16 @@ class _VoiceExpenseSheetState extends ConsumerState<_VoiceExpenseSheet> {
                   items: [for (final c in cats) DropdownMenuItem(value: c, child: Text(c))],
                   onChanged: (v) => setState(() => _category = v),
                 ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  _typeButton('In', 'In', Colors.green),
+                  const SizedBox(width: 6),
+                  _typeButton('Out', 'Out', Colors.red),
+                  const SizedBox(width: 6),
+                  _typeButton('NA', 'None', Colors.grey),
+                ],
+              ),
               const SizedBox(height: 8),
               Text('Date: today, ${DateFormat('d MMM yyyy').format(DateTime.now())}', style: TextStyle(color: muted)),
               const SizedBox(height: 16),

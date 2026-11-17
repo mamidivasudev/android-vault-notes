@@ -47,6 +47,9 @@ class CatalogItem {
     );
   }
 
+  /// True when [q] (lower-case) is exactly one of the item's names or search words.
+  bool hasTerm(String q) => _terms.contains(q);
+
   /// 3 = name starts with query, 2 = a term starts with it, 1 = contains, 0 = no match.
   int matchScore(String q) {
     if (q.isEmpty) return 0;
@@ -88,14 +91,78 @@ int groceryCategoryRank(String category) {
   return i == -1 ? kGroceryCategoryOrder.length - 1 : i;
 }
 
+/// Everyday Telugu names written in English letters → the catalog's English
+/// name ("minapa pappu" → Urad Dal), so typing or speaking them finds the item.
+const Map<String, String> kTeluguAliases = {
+  'minapa pappu': 'Urad Dal', 'minappappu': 'Urad Dal', 'minapappu': 'Urad Dal', 'minumulu': 'Urad Dal',
+  'semiya': 'Vermicelli', 'semya': 'Vermicelli', 'semia': 'Vermicelli', 'semiyalu': 'Vermicelli', 'sevai': 'Vermicelli',
+  'kandi pappu': 'Toor Dal', 'kandipappu': 'Toor Dal', 'kandulu': 'Toor Dal',
+  'pesara pappu': 'Moong Dal', 'pesarapappu': 'Moong Dal', 'pesalu': 'Moong Dal',
+  'senaga pappu': 'Chana Dal', 'senagapappu': 'Chana Dal', 'senagalu': 'Chana Dal',
+  'uppu': 'Salt',
+  'karam': 'Red Chilli Powder', 'kaaram': 'Red Chilli Powder', 'karam podi': 'Red Chilli Powder',
+  'pasupu': 'Turmeric',
+  'biyyam': 'Rice', 'biyam': 'Rice',
+  'palli': 'Peanuts', 'pallilu': 'Peanuts', 'verusenaga': 'Peanuts', 'verusenagalu': 'Peanuts',
+  'chintapandu': 'Tamarind', 'chinta pandu': 'Tamarind',
+  'bellam': 'Jaggery',
+  'panchadara': 'Sugar', 'chakkera': 'Sugar',
+  'paalu': 'Milk', 'palu': 'Milk',
+  'perugu': 'Curd',
+  'neyyi': 'Ghee', 'nei': 'Ghee',
+  'ullipaya': 'Onion', 'ullipayalu': 'Onion', 'ulligadda': 'Onion', 'ulligaddalu': 'Onion', 'ulli': 'Onion',
+  'vellulli': 'Garlic', 'velluli': 'Garlic',
+  'allam': 'Ginger',
+  'bangaladumpa': 'Potato', 'bangala dumpa': 'Potato', 'alu gadda': 'Potato', 'aloo': 'Potato',
+  'vankaya': 'Brinjal', 'vankayalu': 'Brinjal',
+  'bendakaya': 'Okra', 'bendakayalu': 'Okra',
+  'tamata': 'Tomato', 'tamota': 'Tomato', 'tamatalu': 'Tomato',
+  'pachi mirchi': 'Green Chilli', 'pachimirchi': 'Green Chilli', 'mirapakaya': 'Green Chilli', 'mirapakayalu': 'Green Chilli',
+  'kothimeera': 'Coriander Leaves', 'kothimira': 'Coriander Leaves', 'kottimeera': 'Coriander Leaves',
+  'karivepaku': 'Curry Leaves', 'karepaku': 'Curry Leaves',
+  'kobbari': 'Coconut', 'kobbarikaya': 'Coconut', 'kobbari kaya': 'Coconut',
+  'godhuma pindi': 'Wheat Flour', 'goduma pindi': 'Wheat Flour', 'atta': 'Wheat Flour',
+  'ravva': 'Rava', 'upma ravva': 'Rava', 'bombay ravva': 'Rava',
+  'avalu': 'Mustard Seeds',
+  'jeelakarra': 'Cumin', 'jeelakara': 'Cumin', 'jeera': 'Cumin',
+  'nune': 'Oil', 'noone': 'Oil',
+  'palli nune': 'Groundnut Oil', 'verusenaga nune': 'Groundnut Oil',
+  'gudlu': 'Eggs', 'guddu': 'Eggs', 'kodiguddu': 'Eggs', 'kodi gudlu': 'Eggs',
+  'kakarakaya': 'Bitter Gourd', 'kakara kaya': 'Bitter Gourd',
+  'sorakaya': 'Bottle Gourd', 'anapakaya': 'Bottle Gourd',
+  'munagakaya': 'Drumstick', 'munagakayalu': 'Drumstick', 'mulakkada': 'Drumstick',
+  'dosakaya': 'Cucumber',
+  'arati pandu': 'Banana', 'aratipandu': 'Banana', 'aratipallu': 'Banana', 'arati pallu': 'Banana',
+  'nimmakaya': 'Lemon', 'nimmakayalu': 'Lemon',
+  'atukulu': 'Poha',
+  'senaga pindi': 'Besan', 'senagapindi': 'Besan',
+  'ragi pindi': 'Ragi', 'ragulu': 'Ragi',
+  'tea podi': 'Powder Tea', 'tea powder': 'Powder Tea',
+  'coffee podi': 'Coffee',
+  'dhaniyala podi': 'Coriander Powder', 'dhaniyalu podi': 'Coriander Powder',
+};
+
+/// English name for a Telugu word written in English letters, or null.
+String? teluguAlias(String name) {
+  final n = name.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+  return kTeluguAliases[n] ?? kTeluguAliases[n.replaceAll(' ', '')];
+}
+
 /// Best catalog matches for [query], best first.
 List<CatalogItem> searchCatalog(List<CatalogItem> catalog, String query, {int limit = 30}) {
   final q = query.trim().toLowerCase();
   if (q.isEmpty) return const [];
   final scored = <(int, CatalogItem)>[];
+  // A Telugu word in English letters ("semiya") puts its item first.
+  final alias = teluguAlias(q)?.toLowerCase();
+  if (alias != null) {
+    for (final item in catalog) {
+      if (item.name.toLowerCase() == alias) scored.add((10, item));
+    }
+  }
   for (final item in catalog) {
     final s = item.matchScore(q);
-    if (s > 0) scored.add((s, item));
+    if (s > 0 && !scored.any((e) => identical(e.$2, item))) scored.add((s, item));
   }
   scored.sort((a, b) {
     final byScore = b.$1.compareTo(a.$1);
@@ -107,11 +174,21 @@ List<CatalogItem> searchCatalog(List<CatalogItem> catalog, String query, {int li
   return scored.take(limit).map((e) => e.$2).toList();
 }
 
-/// Catalog entry whose English name equals [name] (case-insensitive).
+/// Catalog entry for [name]: its English name, an exact Telugu / Hindi name
+/// (e.g. మినప పప్పు), or a Telugu word in English letters ("minapa pappu").
 CatalogItem? findCatalogItem(List<CatalogItem> catalog, String name) {
   final n = name.trim().toLowerCase();
   for (final item in catalog) {
     if (item.name.toLowerCase() == n) return item;
+  }
+  for (final item in catalog) {
+    if (item.hasTerm(n)) return item;
+  }
+  final alias = teluguAlias(n)?.toLowerCase();
+  if (alias != null) {
+    for (final item in catalog) {
+      if (item.name.toLowerCase() == alias) return item;
+    }
   }
   return null;
 }

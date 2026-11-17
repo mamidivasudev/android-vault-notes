@@ -83,15 +83,37 @@ class CategoryChipBar extends StatelessWidget {
                       color: Theme.of(context).colorScheme.primary,
                     ),
                   ),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: isDark ? Colors.white10 : Colors.grey[100],
-                      shape: BoxShape.circle,
-                    ),
-                    child: IconButton(
-                      icon: const Icon(Icons.close, size: 20),
-                      onPressed: () => Navigator.pop(context),
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Add a new category straight from here.
+                      TextButton.icon(
+                        style: TextButton.styleFrom(
+                          backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: isDark ? 0.25 : 0.12),
+                          foregroundColor: Theme.of(context).colorScheme.primary,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          visualDensity: VisualDensity.compact,
+                          shape: const StadiumBorder(),
+                        ),
+                        icon: const Icon(Icons.add_rounded, size: 20),
+                        label: const Text('Add category', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                        onPressed: () {
+                          Navigator.pop(context);
+                          onAddPressed();
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.white10 : Colors.grey[100],
+                          shape: BoxShape.circle,
+                        ),
+                        child: IconButton(
+                          icon: const Icon(Icons.close, size: 20),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -99,7 +121,8 @@ class CategoryChipBar extends StatelessWidget {
             const Divider(height: 1),
             Expanded(
               child: GridView.builder(
-                padding: const EdgeInsets.all(24),
+                // Last row stays above the phone's nav buttons.
+                padding: EdgeInsets.fromLTRB(24, 24, 24, 24 + MediaQuery.viewPaddingOf(context).bottom),
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 2,
                   childAspectRatio: 2.2,

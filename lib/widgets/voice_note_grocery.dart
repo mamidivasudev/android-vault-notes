@@ -164,7 +164,7 @@ class _VoiceGrocerySheetState extends ConsumerState<_VoiceGrocerySheet> {
       // Use the catalog's spelling, category and Telugu/Hindi names when known.
       final match = findCatalogItem(catalog, it.name);
       final result = await notifier.addItem(
-        match?.name ?? it.name,
+        match?.name ?? teluguAlias(it.name) ?? it.name,
         quantity: it.quantity,
         category: match?.category ?? '',
         localName: match?.localName ?? '',

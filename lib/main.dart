@@ -17,6 +17,9 @@ import 'extras/medicines_view.dart';
 import 'extras/extras_models.dart' show JournalEntry;
 import 'extras/extras_store.dart';
 import 'widgets/scroll_nav_bar.dart';
+import 'widgets/voice_expense_sheet.dart';
+import 'widgets/voice_mic.dart';
+import 'widgets/voice_note_grocery.dart';
 import 'extras/dates_view.dart';
 import 'extras/journal_view.dart';
 import 'views/expenses_view.dart';
@@ -601,14 +604,28 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
                 },
               ),
         floatingActionButton: isSelectionMode || isEditingTable || _currentIndex == 4 || _currentIndex == 8 || _currentIndex == 9 || _currentIndex >= 10
-            ? null 
-            : FloatingActionButton(
-                onPressed: _handleFabPress,
-                elevation: 4,
-                backgroundColor: const Color(0xFF1D63D2),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                child: const Icon(Icons.add, size: 30),
+            ? null
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // Notes / Expenses: small mic above + to add by voice.
+                  if (_currentIndex == 0 || _currentIndex == 1) ...[
+                    VoiceFab(
+                      heroTag: 'voice_tab_$_currentIndex',
+                      onPressed: () => _currentIndex == 0 ? showVoiceNote(context) : showVoiceExpense(context),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  FloatingActionButton(
+                        onPressed: _handleFabPress,
+                        elevation: 4,
+                        backgroundColor: const Color(0xFF1D63D2),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        child: const Icon(Icons.add, size: 30),
+                      ),
+                ],
               ),
       ),
     );

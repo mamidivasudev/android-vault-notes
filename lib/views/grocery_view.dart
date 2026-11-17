@@ -12,6 +12,8 @@ import '../providers.dart';
 import '../utils/grocery_catalog.dart';
 import '../utils/undo_helpers.dart';
 import '../widgets/top_toast.dart';
+import '../widgets/voice_mic.dart';
+import '../widgets/voice_note_grocery.dart';
 
 const _infoBlue = Color(0xFF3B6FD8);
 const _removeRed = Color(0xFFD9534F);
@@ -315,15 +317,24 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
           Positioned(
             right: 16,
             bottom: 16,
-            child: FloatingActionButton(
-              heroTag: 'grocery_add_item',
-              tooltip: 'Add item',
-              elevation: 4,
-              backgroundColor: const Color(0xFF1D63D2),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              onPressed: _openSearch,
-              child: const Icon(Icons.add, size: 30),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                // Say several items at once.
+                VoiceFab(heroTag: 'voice_grocery', onPressed: () => showVoiceGrocery(context)),
+                const SizedBox(height: 12),
+                FloatingActionButton(
+                  heroTag: 'grocery_add_item',
+                  tooltip: 'Add item',
+                  elevation: 4,
+                  backgroundColor: const Color(0xFF1D63D2),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  onPressed: _openSearch,
+                  child: const Icon(Icons.add, size: 30),
+                ),
+              ],
             ),
           ),
       ],

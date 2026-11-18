@@ -136,23 +136,43 @@ class _VoiceGrocerySheet extends ConsumerStatefulWidget {
   ConsumerState<_VoiceGrocerySheet> createState() => _VoiceGrocerySheetState();
 }
 
+/// One heard item, editable before it is added.
+class _HeardItem {
+  final TextEditingController name;
+  final TextEditingController quantity;
+  bool ticked = true;
+  _HeardItem(String n, String q)
+      : name = TextEditingController(text: n),
+        quantity = TextEditingController(text: q);
+  void dispose() {
+    name.dispose();
+    quantity.dispose();
+  }
+}
+
 class _VoiceGrocerySheetState extends ConsumerState<_VoiceGrocerySheet> {
-  List<({String name, String quantity})> _items = [];
-  final Set<int> _ticked = {};
+  final List<_HeardItem> _items = [];
   bool _listening = true;
 
+  int get _tickedCount => _items.where((i) => i.ticked && i.name.text.trim().isNotEmpty).length;
+
+  @override
+  void dispose() {
+    for (final i in _items) {
+      i.dispose();
+    }
+    super.dispose();
+  }
+
   void _heard(String words) {
-    final found = parseSpokenGrocery(words);
     setState(() {
-      final start = _items.length;
-      _items = [..._items, ...found];
-      _ticked.addAll([for (var i = start; i < _items.length; i++) i]);
+      _items.addAll([for (final f in parseSpokenGrocery(words)) _HeardItem(f.name, f.quantity)]);
       _listening = false;
     });
   }
 
   Future<void> _add() async {
-    final chosen = [for (final i in _ticked.toList()..sort()) _items[i]];
+    final chosen = _items.where((i) => i.ticked && i.name.text.trim().isNotEmpty).toList();
     if (chosen.isEmpty) {
       showTopToast(context, 'Tick the items to add', icon: Icons.info, color: kToastBlue);
       return;
@@ -161,11 +181,12 @@ class _VoiceGrocerySheetState extends ConsumerState<_VoiceGrocerySheet> {
     final notifier = ref.read(groceryProvider.notifier);
     var added = 0;
     for (final it in chosen) {
+      final name = it.name.text.trim();
       // Use the catalog's spelling, category and Telugu/Hindi names when known.
-      final match = findCatalogItem(catalog, it.name);
+      final match = findCatalogItem(catalog, name);
       final result = await notifier.addItem(
-        match?.name ?? teluguAlias(it.name) ?? it.name,
-        quantity: it.quantity,
+        match?.name ?? teluguAlias(name) ?? name,
+        quantity: it.quantity.text.trim(),
         category: match?.category ?? '',
         localName: match?.localName ?? '',
       );
@@ -184,17 +205,43 @@ class _VoiceGrocerySheetState extends ConsumerState<_VoiceGrocerySheet> {
       children: _listening
           ? [VoiceMic(hint: 'Say items, e.g. "milk 1 litre, tomato 2 kg and bread"', onResult: _heard)]
           : [
-              if (_items.isEmpty) const Text("Didn't find any items. Tap Speak again."),
-              for (var i = 0; i < _items.length; i++)
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  value: _ticked.contains(i),
-                  onChanged: (v) => setState(() => v == true ? _ticked.add(i) : _ticked.remove(i)),
-                  title: Text(_items[i].name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: _items[i].quantity.isEmpty ? null : Text(_items[i].quantity),
+              if (_items.isEmpty) const Text("Didn't find any items. Tap Speak more."),
+              // Each item can be corrected before adding: tick, name, quantity, remove.
+              for (final it in _items)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      Checkbox(value: it.ticked, onChanged: (v) => setState(() => it.ticked = v ?? false)),
+                      Expanded(
+                        child: TextField(
+                          controller: it.name,
+                          textCapitalization: TextCapitalization.sentences,
+                          onChanged: (_) => setState(() {}),
+                          decoration: const InputDecoration(labelText: 'Item', isDense: true, border: OutlineInputBorder()),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 96,
+                        child: TextField(
+                          controller: it.quantity,
+                          decoration: const InputDecoration(labelText: 'Qty', hintText: '1 kg', isDense: true, border: OutlineInputBorder()),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Remove',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.close, size: 18),
+                        onPressed: () => setState(() {
+                          _items.remove(it);
+                          it.dispose();
+                        }),
+                      ),
+                    ],
+                  ),
                 ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 4),
               Row(
                 children: [
                   TextButton.icon(
@@ -205,7 +252,7 @@ class _VoiceGrocerySheetState extends ConsumerState<_VoiceGrocerySheet> {
                   const Spacer(),
                   TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
                   const SizedBox(width: 8),
-                  FilledButton(onPressed: _add, child: Text(_ticked.isEmpty ? 'Add' : 'Add ${_ticked.length}')),
+                  FilledButton(onPressed: _add, child: Text(_tickedCount == 0 ? 'Add' : 'Add $_tickedCount')),
                 ],
               ),
             ],

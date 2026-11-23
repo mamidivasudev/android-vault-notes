@@ -274,7 +274,7 @@ class _Frame extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+              VoiceTitle(title),
               const SizedBox(height: 16),
               ...children,
             ],

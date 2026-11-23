@@ -250,7 +250,7 @@ Future<String?> listenOnce(BuildContext context, {required String title, require
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+            VoiceTitle(title),
             const SizedBox(height: 12),
             VoiceMic(hint: hint, onResult: (words) => Navigator.pop(sheetContext, words)),
           ],
@@ -258,4 +258,25 @@ Future<String?> listenOnce(BuildContext context, {required String title, require
       ),
     ),
   );
+}
+
+/// Voice window title with a small ✕ on the right that closes the window.
+class VoiceTitle extends StatelessWidget {
+  final String title;
+  const VoiceTitle(this.title, {super.key});
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Expanded(child: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
+          IconButton(
+            tooltip: 'Close',
+            visualDensity: VisualDensity.compact,
+            iconSize: 20,
+            style: IconButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.08)),
+            icon: const Icon(Icons.close),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ],
+      );
 }

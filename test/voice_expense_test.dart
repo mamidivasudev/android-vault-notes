@@ -25,6 +25,28 @@ void main() {
     expect(r.category, 'Grocery');
   });
 
+  group('dates', () {
+    final now = DateTime(2026, 11, 23, 10);
+    test('no date said means today', () {
+      expect(parseSpokenExpense('milk 10 rupees', now: now).date, DateTime(2026, 11, 23));
+    });
+    test('"on 21st" / "date 22nd" take that day this month, amount kept', () {
+      final r = parseSpokenExpense('milk 10 rupees on date 21st', now: now);
+      expect(r.date, DateTime(2026, 11, 21));
+      expect(r.amount, 10);
+      expect(r.title, 'Milk');
+      expect(parseSpokenExpense('milk 10 ruppes date 22nd', now: now).date, DateTime(2026, 11, 22));
+    });
+    test('a day still ahead means last month', () {
+      expect(parseSpokenExpense('petrol 500 on 25th', now: now).date, DateTime(2026, 10, 25));
+    });
+    test('yesterday and a named month', () {
+      expect(parseSpokenExpense('tea 20 yesterday', now: now).date, DateTime(2026, 11, 22));
+      expect(parseSpokenExpense('rent 8000 on 5th november', now: now).date, DateTime(2026, 11, 5));
+      expect(parseSpokenExpense('rent 8000 on 5th november', now: now).amount, 8000);
+    });
+  });
+
   test('no number means no amount', () {
     expect(parseSpokenExpense('add milk').amount, isNull);
   });

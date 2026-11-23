@@ -32,6 +32,7 @@ class _VoiceExpenseSheetState extends ConsumerState<_VoiceExpenseSheet> {
   final _amount = TextEditingController();
   String _heard = '';
   String? _category;
+  DateTime _date = DateTime.now();
   String _type = 'Out'; // In / Out / NA (None), like the add-expense window
   bool _done = false; // a result is shown for checking
 
@@ -61,8 +62,15 @@ class _VoiceExpenseSheetState extends ConsumerState<_VoiceExpenseSheet> {
       _amount.text = parsed.amount == null ? '' : NumberFormat('0.##').format(parsed.amount);
       _category = parsed.category ?? (cats.contains(last) ? last : (cats.isNotEmpty ? cats.first : null));
       // Money coming in when it is said so ("received 500 from Ravi", "salary 30000").
+      _date = parsed.date;
       _type = RegExp(r'\b(received|got|income|salary|credited|refund)\b').hasMatch(words.toLowerCase()) ? 'In' : 'Out';
     });
+  }
+
+  /// The chosen day, at the current time (keeps same-day entries in order).
+  DateTime _withTimeNow(DateTime day) {
+    final now = DateTime.now();
+    return DateTime(day.year, day.month, day.day, now.hour, now.minute, now.second);
   }
 
   Future<void> _save() async {
@@ -73,7 +81,7 @@ class _VoiceExpenseSheetState extends ConsumerState<_VoiceExpenseSheet> {
       return;
     }
     final added = await ref.read(expensesProvider.notifier).addExpense(
-          Expense(title: title, amount: amount, category: _category!, date: DateTime.now(), type: _type),
+          Expense(title: title, amount: amount, category: _category!, date: _withTimeNow(_date), type: _type),
         );
     if (!mounted) return;
     if (!added) {
@@ -122,7 +130,7 @@ class _VoiceExpenseSheetState extends ConsumerState<_VoiceExpenseSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Add expense by voice', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+            const VoiceTitle('Add expense by voice'),
             const SizedBox(height: 16),
             if (!_done) ...[
               VoiceMic(hint: 'Say something like "add milk rupees 33"', onResult: _useResult),
@@ -161,7 +169,36 @@ class _VoiceExpenseSheetState extends ConsumerState<_VoiceExpenseSheet> {
                 ],
               ),
               const SizedBox(height: 8),
-              Text('Date: today, ${DateFormat('d MMM yyyy').format(DateTime.now())}', style: TextStyle(color: muted)),
+              // Date said in the voice (or today); tap to change.
+              InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: _date,
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime.now().add(const Duration(days: 365)),
+                  );
+                  if (picked != null) setState(() => _date = picked);
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(
+                    children: [
+                      Icon(Icons.calendar_today, size: 16, color: muted),
+                      const SizedBox(width: 8),
+                      Text(
+                        DateUtils.isSameDay(_date, DateTime.now())
+                            ? 'Date: today, ${DateFormat('d MMM yyyy').format(_date)}'
+                            : 'Date: ${DateFormat('EEE, d MMM yyyy').format(_date)}',
+                        style: TextStyle(color: muted, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(Icons.edit, size: 14, color: muted),
+                    ],
+                  ),
+                ),
+              ),
               const SizedBox(height: 16),
               Row(
                 children: [

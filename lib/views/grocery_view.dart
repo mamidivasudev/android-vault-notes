@@ -1061,7 +1061,14 @@ Future<double?> askGroceryPrice(BuildContext context, String name) {
           inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))],
           textInputAction: TextInputAction.done,
           onSubmitted: (_) => submit(),
-          decoration: const InputDecoration(labelText: 'Enter price', prefixText: '₹ ', border: OutlineInputBorder()),
+          style: const TextStyle(fontSize: 20),
+          decoration: const InputDecoration(
+            labelText: 'Enter price',
+            labelStyle: TextStyle(fontSize: 19), // bigger "Enter price"
+            prefixText: '₹ ',
+            prefixStyle: TextStyle(fontSize: 20),
+            border: OutlineInputBorder(),
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),

@@ -53,6 +53,7 @@ class VaultService {
   /// They are mirrored into app_settings.json so they are included in backups.
   static const List<String> _snapshotPrefKeys = [
     'grocery_items',
+    'grocery_lists',
     'user_grocery_catalog',
     'grocery_catalog_edits',
     'grocery_catalog_hidden',

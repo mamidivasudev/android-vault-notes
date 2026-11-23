@@ -2318,7 +2318,12 @@ class _MainScreenState extends ConsumerState<MainScreen> with TickerProviderStat
     ref.read(isSelectionModeProvider.notifier).setState(true);
     // Only the tab being shown, never items hidden on the other tab.
     final onBought = ref.read(grocerySelectBoughtProvider);
-    final allIds = ref.read(groceryProvider).where((g) => g.isPurchased == onBought).map((g) => g.id).toSet();
+    final list = ref.read(selectedGroceryListProvider);
+    final allIds = ref
+        .read(groceryProvider)
+        .where((g) => g.isPurchased == onBought && (list == kAllGroceryLists || g.listName == list))
+        .map((g) => g.id)
+        .toSet();
     final selectedIds = ref.read(selectedGroceryProvider);
     
     if (selectedIds.length == allIds.length && allIds.isNotEmpty) {

@@ -21,6 +21,7 @@ class CategoryChipBar extends StatelessWidget {
   final List<Widget>? trailingActions;
   /// Shorter bar, smaller text and tighter icons (used by Expenses).
   final bool compact;
+  final bool showFavoriteButton;
 
   const CategoryChipBar({
     super.key,
@@ -41,6 +42,7 @@ class CategoryChipBar extends StatelessWidget {
     this.onPreviewsToggle,
     this.trailingActions,
     this.compact = false,
+    this.showFavoriteButton = true,
   });
 
   void _showAllCategories(BuildContext context) {
@@ -249,7 +251,7 @@ class CategoryChipBar extends StatelessWidget {
                 color: isDark ? Colors.white70 : Colors.grey[600],
               ),
             ),
-            IconButton(
+            if (showFavoriteButton) IconButton(
               icon: Icon(
                 showFavoritesOnly ? Icons.favorite : Icons.favorite_border,
                 color: Colors.redAccent,

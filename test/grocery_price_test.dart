@@ -30,4 +30,11 @@ void main() {
     expect(text, contains('₹50'));
     expect(text, contains('TOTAL: ₹1,300.5'));
   });
+
+  test('grocery category (Pooja) survives saving and loading', () {
+    final item = GroceryItem(name: 'Flowers', listName: 'Pooja');
+    expect(GroceryItem.fromJson(item.toJson()).listName, 'Pooja');
+    expect(GroceryItem.fromJson(GroceryItem(name: 'Milk').toJson()).listName, '');
+    expect(item.copyWith(listName: 'Weekend').listName, 'Weekend');
+  });
 }

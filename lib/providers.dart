@@ -1875,6 +1875,7 @@ class SyncNotifier extends Notifier<SyncStatus> {
       ref.invalidate(deletedExpensesProvider);
       ref.invalidate(deletedLinksProvider);
       ref.invalidate(groceryProvider);
+      ref.invalidate(groceryListsProvider);
       ref.invalidate(groceryHistoryProvider);
       ref.invalidate(groceryCatalogProvider);
       ref.invalidate(enabledTabsProvider);
@@ -2402,17 +2403,26 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
 
   /// Adds an item. If it is already on the list it is not duplicated: an item
   /// already bought is moved back to "to buy" (with the new quantity, if given).
+  /// The grocery category being viewed ('' when "All" is shown).
+  String get _viewedList {
+    final selected = ref.read(selectedGroceryListProvider);
+    return selected == kAllGroceryLists ? '' : selected;
+  }
+
   Future<GroceryAddResult> addItem(
     String name, {
     String quantity = '',
     String unit = '',
     String category = '',
     String localName = '',
+    String? listName, // defaults to the category being viewed
   }) async {
     await _initFuture;
     final trimmed = name.trim();
     if (trimmed.isEmpty) return GroceryAddResult.ignored;
-    final existing = state.where((i) => _key(i.name) == _key(trimmed)).firstOrNull;
+    final list = listName ?? _viewedList;
+    // The same item may be on two lists (e.g. milk for Weekend and Pooja).
+    final existing = state.where((i) => _key(i.name) == _key(trimmed) && i.listName == list).firstOrNull;
     if (existing != null) {
       if (!existing.isPurchased) return GroceryAddResult.alreadyOnList;
       // Comes back to the top of the list, like a newly added item.
@@ -2432,7 +2442,7 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
     }
     // Newest first, so what was just added is at the top of the list.
     state = [
-      GroceryItem(name: trimmed, quantity: quantity, unit: unit, category: category, localName: localName),
+      GroceryItem(name: trimmed, quantity: quantity, unit: unit, category: category, localName: localName, listName: list),
       ...state,
     ];
     await _saveItems();
@@ -2491,9 +2501,29 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
   }
 
   /// "Shop again": every bought item goes back to the to-buy list.
-  Future<void> uncheckAll() async {
+  /// "Shop again": bought items back to To buy (only [listName] when given).
+  Future<void> uncheckAll({String? listName}) async {
     await _initFuture;
-    state = [for (final i in state) i.isPurchased ? i.copyWith(isPurchased: false, purchasedAt: null, price: null) : i];
+    state = [
+      for (final i in state)
+        i.isPurchased && (listName == null || i.listName == listName)
+            ? i.copyWith(isPurchased: false, purchasedAt: null, price: null)
+            : i,
+    ];
+    await _saveItems();
+  }
+
+  /// A grocery category was renamed: its items follow.
+  Future<void> renameList(String oldName, String newName) async {
+    await _initFuture;
+    state = [for (final i in state) i.listName == oldName ? i.copyWith(listName: newName) : i];
+    await _saveItems();
+  }
+
+  /// Grocery categories were deleted: their items are kept, without a category (shown under All).
+  Future<void> unassignLists(List<String> names) async {
+    await _initFuture;
+    state = [for (final i in state) names.contains(i.listName) ? i.copyWith(listName: '') : i];
     await _saveItems();
   }
 
@@ -2527,6 +2557,81 @@ class GroceryNotifier extends Notifier<List<GroceryItem>> {
 }
 
 enum GroceryAddResult { added, alreadyOnList, movedBack, ignored }
+
+/// "All" in the Grocery category dropdown (not a real category).
+const kAllGroceryLists = 'All';
+
+/// The user's own grocery categories ("Weekend", "Pooja"). No default one.
+class GroceryListsNotifier extends Notifier<List<String>> {
+  static const _key = 'grocery_lists';
+
+  @override
+  List<String> build() {
+    _load();
+    return const [];
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = prefs.getStringList(_key) ?? const [];
+  }
+
+  Future<void> _save(List<String> lists) async {
+    state = lists;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_key, lists);
+    await ref.read(vaultServiceProvider).exportAppSettings();
+  }
+
+  /// Returns false when the name is empty, "All" or already used.
+  Future<bool> addCategory(String name) async {
+    final n = name.trim();
+    if (n.isEmpty || n.toLowerCase() == kAllGroceryLists.toLowerCase()) return false;
+    if (state.any((c) => c.toLowerCase() == n.toLowerCase())) return false;
+    await _save([...state, n]);
+    return true;
+  }
+
+  Future<void> renameCategory(String oldName, String newName) async {
+    final n = newName.trim();
+    if (n.isEmpty || n == oldName || state.any((c) => c.toLowerCase() == n.toLowerCase())) return;
+    await _save([for (final c in state) c == oldName ? n : c]);
+    await ref.read(groceryProvider.notifier).renameList(oldName, n);
+    if (ref.read(selectedGroceryListProvider) == oldName) ref.read(selectedGroceryListProvider.notifier).state = n;
+  }
+
+  Future<void> deleteCategories(List<String> names) async {
+    await _save(state.where((c) => !names.contains(c)).toList());
+    await ref.read(groceryProvider.notifier).unassignLists(names);
+    if (names.contains(ref.read(selectedGroceryListProvider))) {
+      ref.read(selectedGroceryListProvider.notifier).state = kAllGroceryLists;
+    }
+  }
+}
+
+final groceryListsProvider = NotifierProvider<GroceryListsNotifier, List<String>>(GroceryListsNotifier.new);
+
+/// Grocery category being viewed; "All" shows every item.
+class SelectedGroceryListNotifier extends Notifier<String> {
+  static const _key = 'grocery_selected_list';
+
+  @override
+  String build() {
+    SharedPreferences.getInstance().then((p) {
+      final saved = p.getString(_key);
+      if (saved != null && saved != state) state = saved;
+    });
+    return kAllGroceryLists;
+  }
+
+  @override
+  set state(String value) {
+    super.state = value;
+    SharedPreferences.getInstance().then((p) => p.setString(_key, value));
+  }
+}
+
+final selectedGroceryListProvider = NotifierProvider<SelectedGroceryListNotifier, String>(SelectedGroceryListNotifier.new);
 
 final groceryProvider = NotifierProvider<GroceryNotifier, List<GroceryItem>>(GroceryNotifier.new);
 

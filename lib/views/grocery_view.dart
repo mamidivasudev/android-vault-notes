@@ -10,7 +10,9 @@ import 'package:share_plus/share_plus.dart';
 import '../models.dart';
 import '../providers.dart';
 import '../utils/grocery_catalog.dart';
+import '../main_helpers.dart' show addGroceryList, manageGroceryListsDialog;
 import '../utils/undo_helpers.dart';
+import '../widgets/category_chip_bar.dart';
 import '../widgets/top_toast.dart';
 import '../widgets/voice_mic.dart';
 import '../widgets/voice_note_grocery.dart';
@@ -72,6 +74,7 @@ String groceryListText(List<GroceryItem> items, DateTime when) {
 class _GroceryViewState extends ConsumerState<GroceryView> {
   final _input = TextEditingController();
   final _focus = FocusNode();
+  final Map<String, GlobalKey> _listChipKeys = {};
   bool _boughtTab = false; // false = To buy, true = Bought
   final _pages = PageController(keepPage: false);
   final Set<String> _flying = {}; // cards sliding over to the other tab
@@ -293,7 +296,12 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
 
   @override
   Widget build(BuildContext context) {
-    final items = ref.watch(groceryProvider);
+    final lists = ref.watch(groceryListsProvider);
+    var viewing = ref.watch(selectedGroceryListProvider);
+    if (viewing != kAllGroceryLists && !lists.contains(viewing)) viewing = kAllGroceryLists;
+    final everything = ref.watch(groceryProvider);
+    // Only the category being viewed; "All" shows every item.
+    final items = viewing == kAllGroceryLists ? everything : everything.where((i) => i.listName == viewing).toList();
     final toBuy = items.where((i) => !i.isPurchased).toList();
     final bought = items.where((i) => i.isPurchased).toList()
       ..sort((a, b) => (b.purchasedAt ?? b.createdAt).compareTo(a.purchasedAt ?? a.createdAt));
@@ -305,6 +313,20 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       children: [
         Column(
           children: [
+            // Own categories (Weekend, Pooja…) like Notes; "All" first.
+            CategoryChipBar(
+              compact: true,
+              showFavoriteButton: false,
+              categories: [kAllGroceryLists, ...lists],
+              selectedCategory: viewing,
+              onSelected: (c) => ref.read(selectedGroceryListProvider.notifier).state = c,
+              onAddPressed: () => addGroceryList(context, ref),
+              onManagePressed: () => manageGroceryListsDialog(context, ref),
+              chipKeys: _listChipKeys,
+              showFavoritesOnly: false,
+              onFavoriteToggle: () {},
+              itemCount: toBuy.length,
+            ),
             _buildInput(items, bought),
             _buildHeader(items, toBuy, bought),
             Expanded(
@@ -627,7 +649,8 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
       final total = list.fold<double>(0, (sum, i) => sum + (i.price ?? 0));
       return Column(
           children: [
-            if (list.isNotEmpty && !selecting)
+            // Only Bought has this row (Shop again / Clear); To buy has no Clear button.
+            if (boughtPage && list.isNotEmpty && !selecting)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Row(
@@ -639,7 +662,10 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
                           'Shop again?',
                           'Move all ${list.length} bought item${list.length == 1 ? '' : 's'} back to To buy?${showTotal ? ' Their prices will be removed.' : ''}',
                           () async {
-                            await ref.read(groceryProvider.notifier).uncheckAll();
+                            final viewing = ref.read(selectedGroceryListProvider);
+                            await ref.read(groceryProvider.notifier).uncheckAll(
+                              listName: viewing == kAllGroceryLists ? null : viewing,
+                            );
                             if (mounted) showGroceryToast(context, 'All items moved to To buy', icon: Icons.replay, color: _infoBlue);
                           },
                         ),
@@ -1159,6 +1185,7 @@ Future<({String quantity, bool saveToCatalog})?> askGroceryQuantity(
       builder: (dialogContext, setDialogState) {
         void submit() => Navigator.pop(dialogContext, (quantity: controller.text.trim(), saveToCatalog: offerSave && save));
         return AlertDialog(
+          scrollable: true, // fits above the keyboard (was overflowing)
           title: Text(name),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1196,7 +1223,7 @@ Future<({String quantity, bool saveToCatalog})?> askGroceryQuantity(
                   value: save,
                   onChanged: (v) => setDialogState(() => save = v ?? false),
                   title: const Text('Save to my items'),
-                  subtitle: const Text('Not found in the list — save it so it shows up when you search next time'),
+                  subtitle: const Text('New item — find it quickly next time'),
                 ),
               ],
             ],
@@ -1234,6 +1261,7 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
   late final TextEditingController _name = TextEditingController(text: widget.item.name);
   // Quantity is one free-text box ("1 kg", "2 packets"); old quantity + unit are joined.
   late final TextEditingController _qty = TextEditingController(text: widget.item.quantityLabel);
+  late String _list = widget.item.listName;
   late final TextEditingController _price = TextEditingController(
     text: widget.item.price == null ? '' : NumberFormat('0.##').format(widget.item.price),
   );
@@ -1254,6 +1282,7 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
           quantity: _qty.text.trim(),
           unit: '',
           price: widget.item.isPurchased ? double.tryParse(_price.text.trim()) : null,
+          listName: _list,
         ));
     if (!mounted) return;
     showGroceryToast(context, '$name updated', icon: Icons.edit, color: _infoBlue);
@@ -1292,6 +1321,20 @@ class _GroceryEditSheetState extends ConsumerState<_GroceryEditSheet> {
             ),
           ),
           QuantitySuggestionChips(controller: _qty, category: widget.item.category),
+          // Move to another grocery category.
+          if (ref.watch(groceryListsProvider).isNotEmpty || widget.item.listName.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            DropdownButtonFormField<String>(
+              initialValue: _list,
+              decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder()),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('No category')),
+                for (final c in {...ref.watch(groceryListsProvider), if (widget.item.listName.isNotEmpty) widget.item.listName})
+                  DropdownMenuItem(value: c, child: Text(c)),
+              ],
+              onChanged: (v) => setState(() => _list = v ?? ''),
+            ),
+          ],
           if (widget.item.isPurchased) ...[
             const SizedBox(height: 14),
             TextField(

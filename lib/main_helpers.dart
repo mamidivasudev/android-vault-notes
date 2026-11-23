@@ -87,6 +87,54 @@ void addLinkCategory(BuildContext context, WidgetRef ref) {
   );
 }
 
+/// Grocery categories: same manage window as Notes (rename / delete).
+void manageGroceryListsDialog(BuildContext context, WidgetRef ref) {
+  showDialog(
+    context: context,
+    builder: (context) => _CategoryManagementDialog(
+      ref: ref,
+      title: 'Manage Grocery Categories',
+      provider: groceryListsProvider,
+      exclude: const [kAllGroceryLists],
+    ),
+  );
+}
+
+void addGroceryList(BuildContext context, WidgetRef ref) {
+  final controller = TextEditingController();
+  showDialog(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Add Category'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        textCapitalization: TextCapitalization.words,
+        decoration: const InputDecoration(hintText: 'e.g. Weekend, Pooja'),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+        TextButton(
+          onPressed: () async {
+            final name = controller.text.trim();
+            final added = await ref.read(groceryListsProvider.notifier).addCategory(name);
+            if (!dialogContext.mounted) return;
+            if (!added) {
+              ScaffoldMessenger.of(dialogContext).showSnackBar(
+                SnackBar(content: Text(name.isEmpty ? 'Enter a name' : '"$name" already exists')),
+              );
+              return;
+            }
+            ref.read(selectedGroceryListProvider.notifier).state = name; // open the new list
+            Navigator.pop(dialogContext);
+          },
+          child: const Text('Add'),
+        ),
+      ],
+    ),
+  );
+}
+
 void manageCategoriesDialog(BuildContext context, WidgetRef ref) {
   showDialog(
     context: context,
@@ -246,6 +294,7 @@ class _CategoryManagementDialogState extends State<_CategoryManagementDialog> {
                   } else if (widget.provider == expenseCategoriesProvider) addExpenseCategory(context, widget.ref);
                   else if (widget.provider == linkCategoriesProvider) addLinkCategory(context, widget.ref);
                   else if (widget.provider == tableCategoriesProvider) addTableCategory(context, widget.ref);
+                  else if (widget.provider == groceryListsProvider) addGroceryList(context, widget.ref);
                 }
               ),
               IconButton(icon: const Icon(Icons.edit, size: 20), onPressed: () => setState(() => isEditing = true)),

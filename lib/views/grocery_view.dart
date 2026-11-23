@@ -527,9 +527,10 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
               double? price;
               if (!item.isPurchased) {
                 _askingPrice = true;
-                price = await askGroceryPrice(context, item.name);
+                final answer = await askGroceryPrice(context, item.name);
                 _askingPrice = false;
-                if (!mounted) return;
+                if (!mounted || answer == null) return; // Cancel: stays in To buy
+                price = answer.price;
               } else {
                 _askingPrice = true;
                 final ok = await confirmYesNo(
@@ -540,18 +541,39 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
                 _askingPrice = false;
                 if (!ok || !mounted) return;
               }
-              _flying.add(item.id);
               HapticFeedback.lightImpact();
-              setState(() {});
               final notifier = ref.read(groceryProvider.notifier);
-              // Let the card slide away first, then move it to the other list.
-              Future.delayed(_flyDuration, () async {
+              if (_boughtTab) {
+                // Leaves the Bought list: let the card slide away first.
+                _flying.add(item.id);
+                setState(() {});
+                Future.delayed(_flyDuration, () async {
+                  await notifier.toggleItem(item.id, price: price);
+                  if (mounted) setState(() => _flying.remove(item.id));
+                });
+              } else {
+                // On To buy it stays, crossed out (or back to normal).
                 await notifier.toggleItem(item.id, price: price);
-                if (mounted) setState(() => _flying.remove(item.id));
-              });
-              item.isPurchased
-                  ? showGroceryToast(context, '${item.name} back on the list', icon: Icons.undo, color: _infoBlue)
-                  : showGroceryToast(context, price == null ? '${item.name} bought' : '${item.name} bought · ${groceryRupees(price)}');
+                if (!mounted) return;
+              }
+              // Toast with UNDO, so a wrong tap is easy to put right.
+              if (item.isPurchased) {
+                final oldPrice = item.price;
+                showTopToast(context, '${item.name} back on the list',
+                    icon: Icons.undo,
+                    color: _infoBlue,
+                    actionLabel: 'UNDO',
+                    onAction: () => notifier.toggleItem(item.id, price: oldPrice));
+              } else {
+                showTopToast(
+                  context,
+                  price == null ? '✓ ${item.name} moved to Bought' : '✓ ${item.name} moved to Bought · ${groceryRupees(price)}',
+                  icon: Icons.check_circle,
+                  color: _green,
+                  actionLabel: 'UNDO',
+                  onAction: () => notifier.toggleItem(item.id),
+                );
+              }
             }
           },
           onLongPress: () {
@@ -566,13 +588,38 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
         );
 
     final muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6);
-    Widget page(List<GroceryItem> list, String emptyText, Color emptyColor) => list.isEmpty
-        ? Center(child: Text(emptyText, style: TextStyle(color: emptyColor, fontWeight: FontWeight.w600)))
-        : ListView(
-            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            padding: const EdgeInsets.only(bottom: 88),
-            children: [for (final item in list) row(item)],
-          );
+    Widget page(List<GroceryItem> list, String emptyText, Color emptyColor, {List<GroceryItem> doneBelow = const []}) =>
+        list.isEmpty && doneBelow.isEmpty
+            ? Center(child: Text(emptyText, style: TextStyle(color: emptyColor, fontWeight: FontWeight.w600)))
+            : ListView(
+                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.only(bottom: 88),
+                children: [
+                  if (list.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Center(child: Text(emptyText, style: TextStyle(color: emptyColor, fontWeight: FontWeight.w600))),
+                    ),
+                  for (final item in list) row(item),
+                  if (doneBelow.isNotEmpty) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+                      child: Row(
+                        children: [
+                          const Expanded(child: Divider()),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            child: Text('bought', style: TextStyle(color: _green, fontSize: 12, fontWeight: FontWeight.w700)),
+                          ),
+                          const Expanded(child: Divider()),
+                        ],
+                      ),
+                    ),
+                    // Already bought: crossed out and faded so it is clear.
+                    for (final item in doneBelow) Opacity(opacity: 0.6, child: row(item)),
+                  ],
+                ],
+              );
 
     // A page with its Clear button, which turns on the tick boxes.
     Widget withClear(List<GroceryItem> list, bool boughtPage, String emptyText, Color emptyColor) {
@@ -619,7 +666,8 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
                   child: Text('Total ${groceryRupees(total)}', style: const TextStyle(color: _green, fontSize: 15, fontWeight: FontWeight.w800)),
                 ),
               ),
-            Expanded(child: page(list, emptyText, emptyColor)),
+            // To buy also lists what was already bought, crossed out, below.
+            Expanded(child: page(list, emptyText, emptyColor, doneBelow: boughtPage ? const [] : bought)),
           ],
         );
     }
@@ -1043,36 +1091,46 @@ class _SuggestionTile extends StatelessWidget {
 
 // ── Price dialog ────────────────────────────────────────────────────────────
 
-/// Asks what was paid, with the number keypad. Cancel (or an empty box)
-/// returns null: the item is still bought, just without a price.
-Future<double?> askGroceryPrice(BuildContext context, String name) {
+/// "Mark Milk as bought?" with an optional price (number keypad).
+/// Returns null for Cancel (the item stays in To buy); otherwise the item is
+/// bought, with [price] null for "Skip price" or an empty box.
+Future<({double? price})?> askGroceryPrice(BuildContext context, String name) {
   final controller = TextEditingController();
-  return showDialog<double>(
+  return showDialog<({double? price})>(
     context: context,
     barrierDismissible: false,
     builder: (dialogContext) {
-      void submit() => Navigator.pop(dialogContext, double.tryParse(controller.text.trim()));
+      void bought() => Navigator.pop(dialogContext, (price: double.tryParse(controller.text.trim())));
       return AlertDialog(
-        title: Text(name),
+        title: Text('Mark "$name" as bought?'),
         content: TextField(
           controller: controller,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))],
           textInputAction: TextInputAction.done,
-          onSubmitted: (_) => submit(),
+          onSubmitted: (_) => bought(),
           style: const TextStyle(fontSize: 20),
           decoration: const InputDecoration(
-            labelText: 'Enter price',
-            labelStyle: TextStyle(fontSize: 19), // bigger "Enter price"
+            labelText: 'Enter price (optional)',
+            labelStyle: TextStyle(fontSize: 19),
             prefixText: '₹ ',
             prefixStyle: TextStyle(fontSize: 20),
             border: OutlineInputBorder(),
           ),
         ),
+        actionsAlignment: MainAxisAlignment.spaceBetween,
         actions: [
+          // Cancel really cancels: the item stays in To buy.
           TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-          FilledButton(onPressed: submit, child: const Text('Save')),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext, (price: null)), child: const Text('Skip price')),
+              const SizedBox(width: 4),
+              FilledButton.icon(icon: const Icon(Icons.check, size: 18), label: const Text('Bought'), onPressed: bought),
+            ],
+          ),
         ],
       );
     },

@@ -78,6 +78,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
   bool _boughtTab = false; // false = To buy, true = Bought
   final _pages = PageController(keepPage: false);
   final Set<String> _flying = {}; // cards sliding over to the other tab
+  final Set<String> _ticking = {}; // tick shown filled for a moment before the price popup
   bool _askingPrice = false;
 
   @override
@@ -541,6 +542,7 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
           selecting: selecting,
           selected: selected.contains(item.id),
           flying: _flying.contains(item.id),
+          ticking: _ticking.contains(item.id),
           onToggle: () async {
             if (selecting) {
               ref.read(selectedGroceryProvider.notifier).toggle(item.id);
@@ -549,9 +551,15 @@ class _GroceryViewState extends ConsumerState<GroceryView> {
               double? price;
               if (!item.isPurchased) {
                 _askingPrice = true;
+                // Show the tick filled for a moment, then ask.
+                HapticFeedback.selectionClick();
+                setState(() => _ticking.add(item.id));
+                await Future.delayed(const Duration(seconds: 1));
+                if (!mounted) return;
                 final answer = await askGroceryPrice(context, item.name);
                 _askingPrice = false;
-                if (!mounted || answer == null) return; // Cancel: stays in To buy
+                if (mounted) setState(() => _ticking.remove(item.id));
+                if (!mounted || answer == null) return; // Cancel: stays in To buy, tick empty again
                 price = answer.price;
               } else {
                 _askingPrice = true;
@@ -840,6 +848,7 @@ class _GroceryRow extends StatelessWidget {
   final bool selecting;
   final bool selected;
   final bool flying; // sliding over to the other tab
+  final bool ticking; // tick shown filled while the price popup is coming
   final VoidCallback onToggle;
   final VoidCallback onLongPress;
   final VoidCallback onEdit;
@@ -851,6 +860,7 @@ class _GroceryRow extends StatelessWidget {
     required this.selecting,
     required this.selected,
     this.flying = false,
+    this.ticking = false,
     required this.onToggle,
     required this.onLongPress,
     required this.onEdit,
@@ -964,10 +974,10 @@ class _GroceryRow extends StatelessWidget {
                       height: 24,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: done ? _green : Colors.transparent,
-                        border: Border.all(color: done ? _green : muted, width: 1.6),
+                        color: done || ticking ? _green : Colors.transparent,
+                        border: Border.all(color: _green, width: 1.6), // green outline, also while to buy
                       ),
-                      child: Icon(Icons.check, size: 15, color: done ? Colors.white : muted),
+                      child: Icon(Icons.check, size: 15, color: done || ticking ? Colors.white : _green),
                     ),
                   ),
                 ),
